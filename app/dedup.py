@@ -144,6 +144,10 @@ class Fingerprint:
     vuln_type: str
     method: str
     title_key: str
+    # 语义大类（weak_cred / auth_bypass / sqli …）。key 用的是它，
+    # 查重比较也必须用它，否则「unauthorized_access」与
+    # 「认证绕过任意用户接管」明明同类却被判成不同类型。
+    sem: str = ""
 
 
 def normalize_host(url_or_host: str) -> str:
@@ -258,6 +262,7 @@ def fingerprint(target_ref: str, finding: dict) -> Fingerprint:
         vuln_type=vuln_type,
         method=method,
         title_key=title_key,
+        sem=sem,
     )
 
 
@@ -285,12 +290,37 @@ def duplicate_matches(candidate: dict, history: list[dict], *, target_ref: str =
         reasons: list[str] = []
 
         old_key = old.get("dedup_key")
+        # 同时比对「库里存的 key」和「用当前算法现算的 key」。
+        # 库里存的是写入当时的算法结果；算法升级后（如把 vuln_type 折叠到语义大类），
+        # 旧 key 与新算法的候选 key 永远不相等，只看 old_key 会让查重静默失效。
         if old_key and old_key == c_fp.key:
             reasons.append("全局 dedup_key 完全一致")
+        elif o_fp.key and o_fp.key == c_fp.key:
+            reasons.append("按当前算法重算后 dedup_key 一致（历史 key 已过期）")
 
-        same_type = bool(c_fp.vuln_type and o_fp.vuln_type and c_fp.vuln_type == o_fp.vuln_type)
+        # 类型比较优先用语义大类：LLM 对同一个洞会写
+        # 「unauthorized_access」「认证绕过任意用户接管」等不同字符串，
+        # 但它们同属 auth_bypass。只比 vuln_type 字符串会让查重失效。
+        c_sem = getattr(c_fp, "sem", "")
+        o_sem = getattr(o_fp, "sem", "")
+        if c_sem and o_sem and c_sem != "other" and o_sem != "other":
+            same_type = c_sem == o_sem
+        else:
+            same_type = bool(c_fp.vuln_type and o_fp.vuln_type and c_fp.vuln_type == o_fp.vuln_type)
         same_endpoint = bool(c_fp.endpoint and o_fp.endpoint and c_fp.endpoint == o_fp.endpoint)
+        # 端点宽松匹配：一方带 query、另一方不带时，也视为同一入口。
+        # 实测同一洞常被写成 `/api/code` 与 `/api/code?uid=admin` 两种形式，
+        # 严格相等会把它们判成不同端点，导致重复提交拦不住。
+        # 只有「单边无 query」才放宽；双方都带不同 query 仍算不同入口（真有区分度）。
+        if not same_endpoint and c_fp.endpoint and o_fp.endpoint:
+            c_base, _, c_q = c_fp.endpoint.partition("?")
+            o_base, _, o_q = o_fp.endpoint.partition("?")
+            same_endpoint = bool(c_base and c_base == o_base and not (c_q and o_q))
         same_path = bool(c_path and o_path and c_path == o_path)
+        if not same_path and c_path and o_path:
+            c_base, _, c_q = c_path.partition("?")
+            o_base, _, o_q = o_path.partition("?")
+            same_path = bool(c_base and c_base == o_base and not (c_q and o_q))
         same_host = bool(c_fp.host and o_fp.host and c_fp.host == o_fp.host)
         same_method = not c_fp.method or not o_fp.method or c_fp.method == o_fp.method
         same_product = bool(c_product and o_product and c_product == o_product)
