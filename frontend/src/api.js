@@ -302,6 +302,9 @@ export const api = {
     req("GET", `/api/tasks/${id}/submit-list${qs({ submitted, q, ...opts })}`),
   rejectedList: (id, q) => req("GET", `/api/tasks/${id}/rejected${qs({ q })}`),
   archivedList: (id, q, opts = {}) => req("GET", `/api/tasks/${id}/archived${qs({ q, ...opts })}`),
+  // 同类漏洞聚合：把一个洞的多种描述折叠成一行，展开看变体（只做展示层聚合）
+  clusteredList: (id, q, opts = {}) =>
+    req("GET", `/api/tasks/${id}/clustered${qs({ q, ...opts })}`),
   restoreArchived: (id) => req("POST", `/api/results/${id}/restore`),
   listTaskHosts: (taskId, opts = {}) =>
     req("GET", `/api/tasks/${taskId}/hosts${qs(opts)}`),

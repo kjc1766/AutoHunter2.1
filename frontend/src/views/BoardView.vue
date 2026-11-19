@@ -22,6 +22,13 @@ const submitItems = ref([]);       // 待提交
 const killsweepItems = ref([]);    // 通杀列
 const rejectedItems = ref([]);     // 已驳回
 const archivedItems = ref([]);     // AI 未采纳归档（ignored/deepen，可救回）
+// 同类聚合：把一个洞的多种描述折叠成一行，点开看变体。
+// 只做展示层聚合，不改任何 finding 的状态与判定。
+const clusteredItems = ref([]);
+const clusteredTotal = ref(0);
+const clusteredRaw = ref(0);
+const clusteredOnlyMulti = ref(true);
+const expandedClusters = ref(new Set());
 const expandedKillsweeps = ref(new Set());
 const searchDraft = ref("");
 const searchText = ref("");
@@ -59,7 +66,7 @@ const STREAM_DETAIL_CAP = 40;
 let ws = null, poll = null, boardPoll = null, searchTimer = null;
 let wsReconnectTimer = null, wsReconnectAttempt = 0, wsIntentionalClose = false;
 let eventRefreshTimer = null, eventRefreshPending = null;
-const LIST_TABS = new Set(["review", "submit", "killsweep", "rejected", "archived"]);
+const LIST_TABS = new Set(["review", "submit", "killsweep", "rejected", "archived", "clustered"]);
 // 记录哪些列表 tab 已经加载过数据：首屏只拉看板，列表按需加载；后台只刷新看过的列表。
 const loadedTabs = ref(new Set());
 // 内存中按 target 聚合的实时轨迹（WS 推送），配合落库 trace API 做回放。
@@ -124,6 +131,39 @@ async function loadRejected() {
   const rows = await api.rejectedList(id);
   if (id === props.id) rejectedItems.value = rows.map(withSearchCache);
 }
+async function openClustered() {
+  tab.value = "clustered";
+  await loadClustered();
+}
+
+async function loadClustered() {
+  const id = props.id;
+  try {
+    const res = await api.clusteredList(id, undefined, {
+      only_multi: clusteredOnlyMulti.value ? 1 : 0,
+    });
+    if (id !== props.id) return;
+    const rows = Array.isArray(res) ? res : (res.items || []);
+    clusteredItems.value = rows;
+    clusteredTotal.value = res.total_clusters ?? rows.length;
+    clusteredRaw.value = res.total_findings ?? 0;
+  } catch (e) {
+    clusteredItems.value = [];
+  }
+}
+
+function toggleCluster(t) {
+  const s = new Set(expandedClusters.value);
+  const key = t + (clusteredItems.value[t]?.primary?.id || "");
+  if (s.has(key)) s.delete(key);
+  else s.add(key);
+  expandedClusters.value = s;
+}
+
+function clusterExpanded(t) {
+  return expandedClusters.value.has(t + (clusteredItems.value[t]?.primary?.id || ""));
+}
+
 async function loadArchived(opts = {}) {
   const id = props.id;
   const reset = opts.reset !== false;
@@ -1714,6 +1754,10 @@ function parseEventTs(ts) {
         <i v-if="archivedCount">{{ archivedCount }}</i>
         <em v-if="archivedWriteCount" class="write-flag">写删 {{ archivedWriteCount }}</em>
       </button>
+      <button type="button" role="tab" :aria-selected="tab === 'clustered'" :class="{ active: tab === 'clustered' }" @click="openClustered" title="把同一个洞的多种描述折叠成一行，点开看变体">
+        <span class="tab-long">同类聚合</span><span class="tab-short">聚合</span>
+        <i v-if="clusteredTotal">{{ clusteredTotal }}</i>
+      </button>
     </div>
 
     <div v-if="searchEnabled" class="search-strip">
@@ -2026,6 +2070,46 @@ function parseEventTs(ts) {
             <span v-if="k.status === 'failed'">LLM/中转站失败后可直接重启，不用改复审状态。</span>
             <span v-else-if="!(k.is_killsweep || k.has_sites)">分析完成但没有圈到通杀站；也可再跑一轮。</span>
             <span v-else>误判、资产不稳定、未实际验证或通杀条件不成立时使用。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 同类聚合：把同一个洞的多种描述折叠成一行，点开看它派生的各个变体 -->
+    <div v-show="tab === 'clustered'" class="list-panel">
+      <div class="list-head">
+        <span>同类聚合</span>
+        <small>
+          {{ clusteredTotal }} 组 / 共 {{ clusteredRaw }} 条原始记录 ——
+          同一漏洞被多次描述时折叠成一行，展开可看各变体（判定与状态不变）
+        </small>
+        <label class="cluster-filter">
+          <input type="checkbox" v-model="clusteredOnlyMulti" @change="loadClustered" />
+          只看有变体的
+        </label>
+      </div>
+      <div v-if="!clusteredItems.length" class="empty">暂无记录（跑完一轮后同一个洞的多次描述会聚到这里）</div>
+      <div v-for="(c, ci) in clusteredItems" :key="c.primary?.id || ci" class="cluster-card">
+        <div class="result-row cluster-row" @click="toggleCluster(ci)">
+          <span class="sev-pill" :class="c.severity">{{ c.severity || "-" }}</span>
+          <div class="rr-main">
+            <div class="rr-title">
+              <span v-if="c.count > 1" class="cluster-badge">{{ c.count }} 个变体</span>
+              {{ c.primary?.title || "-" }}
+            </div>
+            <div class="meta">{{ c.host }} · {{ c.semantic }}</div>
+            <div class="meta rr-time">{{ c.primary?.target_url }}</div>
+          </div>
+          <span class="cluster-arrow">{{ clusterExpanded(ci) ? "▾" : "▸" }}</span>
+        </div>
+        <div v-if="clusterExpanded(ci) && c.count > 1" class="cluster-variants">
+          <div class="cluster-variants-head">同一漏洞的其它描述（{{ c.count - 1 }} 条）</div>
+          <div v-for="v in c.variants" :key="v.id" class="variant-row" @click.stop="openRejected(v.id)">
+            <span class="sev-pill tiny" :class="v.severity_claimed">{{ v.severity_claimed || "-" }}</span>
+            <div class="rr-main">
+              <div class="rr-title small">{{ v.title }}</div>
+              <div class="meta">{{ v.target_url }}</div>
+            </div>
           </div>
         </div>
       </div>

@@ -237,7 +237,20 @@ def fingerprint(target_ref: str, finding: dict) -> Fingerprint:
     vuln_type = normalize_vuln_type(finding.get("vuln_type", ""))
     method = normalize_method(finding)
     title_key = _title_key(finding.get("title", ""), finding.get("description", ""))
-    raw = "|".join([host, endpoint, method, vuln_type])
+
+    # 关键：把自由写法的 vuln_type 再折叠到语义大类。
+    # normalize_vuln_type 只认别名表，表外的自由文本会原样进入 key，
+    # 导致同一个洞因为 LLM 换个说法（「默认口令弱口令」vs「弱口令+后台越权」）
+    # 就得到不同 key，去重彻底失效（实测鑫贝帝一洞产生 10 条）。
+    # 这里用 cluster.semantic_class 做粗分类，只影响 key，不改变对外暴露的 vuln_type。
+    sem = ""
+    try:
+        from app.cluster import semantic_class
+        sem = semantic_class(finding.get("title", ""), finding.get("vuln_type", ""))
+    except Exception:
+        sem = ""
+    bucket = sem if sem and sem != "other" else vuln_type
+    raw = "|".join([host, endpoint, method, bucket])
     return Fingerprint(
         key=hashlib.sha256(raw.encode()).hexdigest(),
         host=host,

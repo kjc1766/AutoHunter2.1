@@ -3243,7 +3243,10 @@ class TaskRunner:
             # 深挖没打穿后永久沉底、对所有人工面板不可见（对应问题：打回深挖未升级丢洞）。
             revived_origin_fid = None
             produced_new_finding = (verdict == Verdict.found.value) or bool(findings)
-            if tgt.status == "dead" and not produced_new_finding:
+            # 终态既可能是 dead（深挖无果）也可能是 done（本轮跑完但没有可替代的新洞）。
+            # 原实现只认 dead，实测 34 条深挖前身中 29 条落在 done，导致永远不复位，
+            # 全部卡在 superseded 而对所有人工面板不可见（问题：打回深挖未升级丢洞）。
+            if tgt.status in ("dead", "done") and not produced_new_finding:
                 revived_origin_fid = await self._revive_deepen_origin(session, tgt)
             await session.commit()
             if auto_deepen_info:

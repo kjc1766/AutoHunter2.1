@@ -82,12 +82,21 @@ def _classify_replay_run(result: dict, output: str) -> tuple[str, str]:
     _MISSING = ("command not found", "not found", "No such file", "cannot find",
                 "Permission denied", "Network is unreachable", "Could not resolve",
                 "Temporary failure in name resolution", "Connection refused")
+    # shell 语法错误：PoC 本身写坏了，命令根本没跑起来。
+    # 原实现把这类输出交给 LLM 判 NO，导致「高危→deepen」误降级（实测 19 条）。
+    _SYNTAX = ("syntax error", "unexpected eof", "unexpected token",
+               "unterminated", "command substitution", "bad substitution",
+               "unexpected newline", "syntax error near")
     if not text:
         if rc not in (0, None):
             return "not_run", f"无输出且退出码 {rc}"
         return "not_run", "命令无任何输出"
 
-    if rc not in (0, None) and len(text) < 40 and any(m.lower() in text.lower() for m in _MISSING):
+    low = text.lower()
+    if any(s in low for s in _SYNTAX):
+        return "not_run", f"PoC 语法错误（命令未执行）: {text[:60]}"
+
+    if rc not in (0, None) and len(text) < 120 and any(m.lower() in low for m in _MISSING):
         return "not_run", f"环境错误: {text[:60]}"
 
     return "ran", ""
@@ -648,10 +657,21 @@ class Reviewer:
         judge_failed = False
         try:
             msg = self.llm.chat([
-                {"role": "system", "content": "你在做漏洞复现验证。根据 PoC 的实际执行输出，判断该漏洞是否被成功复现。只回 YES 或 NO 加一句理由。"},
+                {"role": "system", "content": (
+                    "你在做漏洞复现验证。根据 PoC 的实际执行输出，判断该漏洞是否被成功复现。\n\n"
+                    "分级判定（重要）：\n"
+                    "• 完整利用链走通（如登录取到 token → 用 token 读到敏感数据）→ 回 YES\n"
+                    "• 关键前置条件已实证（如弱口令登录成功并返回管理员 token、"
+                    "上传成功并回读、SQLi 报错回显出库名），但后续步骤因 token 过期/缺 header/"
+                    "PoC 少一步而未走完 → 也回 YES，并在理由里注明「部分复现」\n"
+                    "• 输出与漏洞无关、或明确证伪（如接口 404 不存在、鉴权正常拦截）→ 回 NO\n\n"
+                    "判 NO 的唯一依据是「证据指向漏洞不成立」，"
+                    "不能因为「链路没走完」就判 NO —— 那属于部分复现。\n"
+                    "只回 YES 或 NO 加一句理由。"
+                )},
                 {"role": "user", "content": (
                     f"漏洞: {finding.title}\n预期: {finding.description[:500]}\n\n"
-                    f"PoC 实际执行输出:\n{out}\n\n该漏洞是否成功复现？"
+                    f"PoC 实际执行输出:\n{out}\n\n该漏洞是否成功复现（含部分复现）？"
                 )},
             ], temperature=0.0)
             verdict_text = (msg.content or "").strip()

@@ -1494,3 +1494,73 @@ async def user_deepen(finding_id: str, req: DeepenRequest,
         r.user_reviewed_at = _now()
     await session.commit()
     return {"ok": True, "message": suffix.strip(" →")}
+
+
+@router.get("/tasks/{task_id}/clustered")
+async def clustered_findings(task_id: str,
+                             search: Optional[str] = Query(None, alias="q"),
+                             only_multi: bool = Query(False, alias="only_multi"),
+                             limit: int = Query(0, ge=0, le=500),
+                             offset: int = Query(0, ge=0),
+                             session: AsyncSession = Depends(get_session)):
+    """同类漏洞聚合列表：把一个洞的多种描述折叠成一行，展开看变体。
+
+    设计原则：**只做展示聚合，不改任何 finding 的状态与判定**。
+    每个变体仍能单独点开、单独复核、单独提交（明细接口不变）。
+
+    - only_multi=1 只看有变体的组（>=2 条），用于快速定位重复重灾区；
+    - q 走服务端搜索，命中任一变体即整组返回；
+    - 返回 {items, has_more, total_clusters, total_findings}，
+      items 每项为 cluster 结构（primary + variants + count + semantic）。
+    """
+    from app.cluster import build_clusters
+
+    rows = (await session.execute(
+        select(Finding, Review)
+        .outerjoin(Review, Review.finding_id == Finding.id)
+        .where(Finding.task_id == task_id)
+        .order_by(Finding.created_at.desc())
+    )).all()
+
+    items = []
+    for f, r in rows:
+        d = _finding_dict(f, r, compact=True)
+        # 聚类需要完整字段
+        d["vuln_type"] = f.vuln_type or ""
+        d["target_url"] = f.target_url or ""
+        d["poc"] = f.poc or ""
+        d["severity_claimed"] = str(f.severity_claimed or "")
+        d["id"] = f.id
+        items.append(d)
+
+    clusters = build_clusters(items)
+
+    if search:
+        needle = search.lower()
+
+        def _hit(c: dict) -> bool:
+            blob = json.dumps(c, ensure_ascii=False, default=str).lower()
+            return needle in blob
+
+        clusters = [c for c in clusters if _hit(c)]
+
+    if only_multi:
+        clusters = [c for c in clusters if c["count"] > 1]
+
+    total = len(clusters)
+    if limit:
+        page = clusters[offset:offset + limit]
+        return {
+            "items": page,
+            "has_more": offset + limit < total,
+            "limit": limit,
+            "offset": offset,
+            "total_clusters": total,
+            "total_findings": len(items),
+        }
+    return {
+        "items": clusters,
+        "has_more": False,
+        "total_clusters": total,
+        "total_findings": len(items),
+    }
