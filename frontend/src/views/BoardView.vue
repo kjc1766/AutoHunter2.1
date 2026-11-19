@@ -29,6 +29,17 @@ const clusteredTotal = ref(0);
 const clusteredRaw = ref(0);
 const clusteredOnlyMulti = ref(true);
 const expandedClusters = ref(new Set());
+// AI 未采纳归档的折叠展开状态（默认收起，避免一个洞 11 条铺满屏）
+const expandedArchGroups = ref(new Set());
+function toggleArchGroup(id) {
+  const s = new Set(expandedArchGroups.value);
+  if (s.has(id)) s.delete(id);
+  else s.add(id);
+  expandedArchGroups.value = s;
+}
+function archExpanded(id) {
+  return expandedArchGroups.value.has(id);
+}
 const expandedKillsweeps = ref(new Set());
 const searchDraft = ref("");
 const searchText = ref("");
@@ -2144,20 +2155,37 @@ function parseEventTs(ts) {
         暂无 AI 未采纳的漏洞（AI 审核判「非漏洞」或「深挖未升级」的洞会沉淀到这里，防止误杀）
       </div>
       <div v-else-if="!filteredArchived.length" class="empty">没有匹配当前关键词的未采纳漏洞</div>
-      <div v-for="f in filteredArchived" :key="f.id" class="result-row archived" :class="{ 'write-op': f.is_write_op }" @click="openArchived(f.id)">
-        <span class="sev-pill" :class="effectiveSeverity(f)">{{ effectiveSeverity(f) }}</span>
-        <div class="rr-main">
-          <div class="rr-title">
-            <span class="arch-tag" :class="[f.archive_reason, { write: f.is_write_op }]">{{ f.archive_reason_text }}</span>
-            {{ f.title }}
+      <div v-for="f in filteredArchived" :key="f.id" class="arch-group">
+        <div class="result-row archived" :class="{ 'write-op': f.is_write_op }" @click="openArchived(f.id)">
+          <span class="sev-pill" :class="effectiveSeverity(f)">{{ effectiveSeverity(f) }}</span>
+          <div class="rr-main">
+            <div class="rr-title">
+              <span v-if="f.variant_count > 1" class="cluster-badge">{{ f.variant_count }} 个变体</span>
+              <span class="arch-tag" :class="[f.archive_reason, { write: f.is_write_op }]">{{ f.archive_reason_text }}</span>
+              {{ f.title }}
+            </div>
+            <div class="meta">{{ f.vuln_type }} · {{ f.target_url }}</div>
+            <div class="meta rr-time">发现 {{ fmtLocalTime(f.created_at) }}<template v-if="f.llm_model"> · 模型 {{ f.llm_model }}</template></div>
+            <div v-if="f.ignore_reasons?.length" class="meta rr-note">AI 理由：{{ f.ignore_reasons.join("；") }}</div>
           </div>
-          <div class="meta">{{ f.vuln_type }} · {{ f.target_url }}</div>
-          <div class="meta rr-time">发现 {{ fmtLocalTime(f.created_at) }}<template v-if="f.llm_model"> · 模型 {{ f.llm_model }}</template></div>
-          <div v-if="f.ignore_reasons?.length" class="meta rr-note">AI 理由：{{ f.ignore_reasons.join("；") }}</div>
+          <div class="rr-side" @click.stop>
+            <span class="score">{{ f.review?.score ?? "-" }}</span>
+            <button v-if="!readonly" class="mini-action" type="button" @click="restoreArchived(f.id)">恢复到复审</button>
+          </div>
         </div>
-        <div class="rr-side" @click.stop>
-          <span class="score">{{ f.review?.score ?? "-" }}</span>
-          <button v-if="!readonly" class="mini-action" type="button" @click="restoreArchived(f.id)">恢复到复审</button>
+        <div v-if="f.variant_count > 1" class="cluster-variants">
+          <div class="cluster-variants-head" @click="toggleArchGroup(f.id)">
+            {{ archExpanded(f.id) ? "▾" : "▸" }} 同一漏洞的其它描述（{{ f.variant_count - 1 }} 条）
+          </div>
+          <div v-show="archExpanded(f.id)">
+            <div v-for="v in f.variants" :key="v.id" class="variant-row" @click.stop="openArchived(v.id)">
+              <span class="sev-pill tiny" :class="effectiveSeverity(v)">{{ effectiveSeverity(v) }}</span>
+              <div class="rr-main">
+                <div class="rr-title small">{{ v.title }}</div>
+                <div class="meta">{{ v.target_url }}</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <button v-if="archivedHasMore" class="load-more" @click="loadMoreArchived" :disabled="archivedLoading">

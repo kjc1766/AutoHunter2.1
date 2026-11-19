@@ -4141,3 +4141,22 @@ main {
   cursor: pointer;
   white-space: nowrap;
 }
+
+/* ===== AI 未采纳：同类折叠 ===== */
+.arch-group {
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+.arch-group:has(.cluster-variants) {
+  border: 1px solid var(--line, #e5e7eb);
+  overflow: hidden;
+  background: var(--panel, #fff);
+}
+.arch-group .cluster-variants-head {
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 2px;
+}
+.arch-group .cluster-variants-head:hover {
+  color: #374151;
+}

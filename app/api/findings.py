@@ -447,13 +447,46 @@ async def rejected_list(task_id: str, search: Optional[str] = Query(None, alias=
     return await _paginated_finding_list(session, q, search, compact, limit, offset)
 
 
+def _fold_archived(items: list[dict], grouped: bool) -> list[dict]:
+    """把归档列表按「同一漏洞」折叠：每组保留一条主行，其余进 variants。
+
+    只做展示聚合，不改 verdict/status/user_status，每组内的变体都可通过
+    variant_ids 单独定位、单独恢复或深挖。
+
+    主行选取：写/删类优先（用户最容易漏看的真洞）> 定级高 > verdict=deepen > 创建早。
+    """
+    if not grouped or len(items) <= 1:
+        return items
+    from app.cluster import build_clusters
+
+    clusters = build_clusters(items)
+    out: list[dict] = []
+    for c in clusters:
+        primary = dict(c["primary"])
+        variants = c["variants"]
+        primary["variant_count"] = c["count"]
+        primary["variants"] = variants
+        primary["variant_ids"] = [v.get("id") for v in variants][:100]
+        primary["is_group_primary"] = c["count"] > 1
+        out.append(primary)
+    # 多条的组排前面：用户最该先看「一个洞被写了多少遍」的地方
+    out.sort(key=lambda d: (-(d.get("variant_count") or 1),
+                            -(1 if d.get("is_write_op") else 0)))
+    return out
+
+
 @router.get("/tasks/{task_id}/archived")
 async def archived_list(task_id: str, search: Optional[str] = Query(None, alias="q"),
                         limit: int = Query(0, ge=0, le=200),
                         offset: int = Query(0, ge=0),
+                        grouped: bool = Query(True, alias="grouped"),
                         session: AsyncSession = Depends(get_session)):
     """AI 未采纳归档：AI 审核判 ignored（疑似误杀）或 deepen 深挖后未升级归档的漏洞。
     数据保留、默认不进主流程，供人工回看纠错——一键「恢复到复审队列」可救回被误判的好洞。
+
+    grouped=True（默认）时按「同一漏洞的多种描述」折叠：同一个洞只出一行，
+    其余描述放在 variants 里。实测 29 条归档只有 9 个独立洞（鑫贝帝一个洞占 11 条）。
+    折叠只影响展示，不改任何 finding 的 verdict/status，逐条操作能力保留在 variants 内。
 
     支持分页（limit/offset）：量大时前端一次拉 50 条、滚动加载更多，避免一次全量拉取卡顿。
     搜索走服务端（q），保证跨全部页命中而不是只在已加载页里搜。"""
@@ -504,6 +537,7 @@ async def archived_list(task_id: str, search: Optional[str] = Query(None, alias=
     if search and search.strip():
         rows = (await session.execute(q)).all()
         matched = [d for d in (_to_dict(f, r) for f, r in rows) if _matches_query(d, search)]
+        matched = _fold_archived(matched, grouped)
         if not limit:
             return matched
         page = matched[offset:offset + limit]
@@ -512,9 +546,20 @@ async def archived_list(task_id: str, search: Optional[str] = Query(None, alias=
 
     if not limit:
         rows = (await session.execute(q)).all()
-        return [_to_dict(f, r) for f, r in rows]
+        out = [_to_dict(f, r) for f, r in rows]
+        return _fold_archived(out, grouped) if grouped else out
 
-    # DB 层分页：多取 1 条判断是否还有下一页
+    # DB 层分页：多取 1 条判断是否还有下一页。
+    # 注意：聚合模式下不能按 DB 行数分页（一页 50 行可能只折叠成 3 组），
+    # 改为先全量取再折叠再切片，保证每组完整、翻页语义正确。
+    if grouped:
+        rows = (await session.execute(q)).all()
+        folded = _fold_archived([_to_dict(f, r) for f, r in rows], True)
+        page = folded[offset:offset + limit]
+        return {"items": page, "has_more": offset + limit < len(folded),
+                "limit": limit, "offset": offset,
+                "total_groups": len(folded), "total_items": len(rows)}
+
     rows = (await session.execute(q.offset(offset).limit(limit + 1))).all()
     has_more = len(rows) > limit
     page = [_to_dict(f, r) for f, r in rows[:limit]]
