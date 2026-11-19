@@ -2157,24 +2157,18 @@ class TaskRunner:
             # 而不是让协程静默死亡、目标永远虚挂 scanning 直到被 reclaim 回队空转。
             summary = self._summarize_exc(e)
             host_hint = (url or "").split("://")[-1].rstrip("/")[:60]
-            logger.warning(
-                "TaskRunner[%s] worker crashed target=%s host=%s:\n%s",
-                self.task_id, target_id[:8], host_hint, traceback.format_exc(),
-            )
-            self._live.pop(target_id, None)
-            self._worker_last_activity.pop(target_id, None)
-            self._worker_cancel_events.pop(target_id, None)
 
-            # 「database is locked」是瞬时资源竞争，不是挖掘结论。
-            # SQLite 单写者模型下，worker 心跳 / event 落库 / auth_status 更新会短时抢锁。
-            # 原逻辑把它塞进 _persist_worker_result(verdict="error")，等于把一个刚挖到洞的
-            # 目标整体判死（实测 verdict=error 的 2 个目标就是这么来的）。
-            # 这里改成：锁冲突走 blocked 语义回 waiting 池，冷却后重试，成果不丢。
+            # 先判瞬时锁冲突再打日志：这类不是 worker 崩溃，只是撞了 SQLite 写锁。
+            # 原实现把 worker crashed 打在判断之前，导致每次成功回队也会留一条
+            # 「worker crashed」，与实际的「已回 waiting 重试」形成矛盾日志（实测 10 对 10）。
             if _is_transient_db_error(e):
                 logger.warning(
-                    "TaskRunner[%s] worker hit transient DB lock target=%s，回 waiting 重试:\n%s",
-                    self.task_id, target_id[:8], traceback.format_exc(),
+                    "TaskRunner[%s] worker hit transient DB lock target=%s，回 waiting 重试",
+                    self.task_id, target_id[:8],
                 )
+                self._live.pop(target_id, None)
+                self._worker_last_activity.pop(target_id, None)
+                self._worker_cancel_events.pop(target_id, None)
                 try:
                     async with SessionLocal() as s:
                         tgt = await s.get(Target, target_id)
@@ -2197,6 +2191,14 @@ class TaskRunner:
                                    self.task_id, target_id[:8])
                 self._schedule_prune_target_traces(task_id, target_id)
                 return
+
+            logger.warning(
+                "TaskRunner[%s] worker crashed target=%s host=%s:\n%s",
+                self.task_id, target_id[:8], host_hint, traceback.format_exc(),
+            )
+            self._live.pop(target_id, None)
+            self._worker_last_activity.pop(target_id, None)
+            self._worker_cancel_events.pop(target_id, None)
 
             try:
                 async with SessionLocal() as s:
