@@ -38,6 +38,11 @@ from app.tools.cvss31 import (
 
 # 触发复现验证的等级
 _HIGH_VALUE = {Severity.critical, Severity.high}
+
+# 同一漏洞被「未证实」打回的次数上限。到达后强制归档进「AI 未采纳」并标注，
+# 不再无限重审——实测同一个 SQL 注入被反复打回 4 次，每次都是 deepen/uncertain，
+# 既进不了复审也进不了未采纳，等于原地空转（用户视角就是"被吞了"）。
+UNCERTAIN_ATTEMPT_CAP = 2
 _REVIEW_TEXT_LIMITS = {
     "description": 1800,
     "poc": 1800,
@@ -474,6 +479,28 @@ class Reviewer:
         # 信度约束：未经系统复现的，不允许标 confirmed（最高 likely）
         if not review.reproduced and review.confidence == Confidence.confirmed:
             review.confidence = Confidence.likely
+
+        # 未证实次数熔断：同一个洞反复"未证实"打回，必须收敛到「AI 未采纳」。
+        # 只对真·未证实（reproduced=False 且 verdict=deepen）计数；accepted 不计数。
+        if review.verdict == ReviewVerdict.deepen and not review.reproduced:
+            review.uncertain_attempts = int(getattr(review, "uncertain_attempts", 0) or 0) + 1
+            if review.uncertain_attempts >= UNCERTAIN_ATTEMPT_CAP:
+                review.verdict = ReviewVerdict.ignored
+                review.severity_final = review.severity_final or finding.severity_claimed or Severity.medium
+                reasons = list(review.ignore_reasons or [])
+                reasons.insert(0, (
+                    f"已连续 {review.uncertain_attempts} 次「未证实」（复现未通过），"
+                    "按熔断规则归档进 AI 未采纳，供人工判定是否误杀"
+                ))
+                review.ignore_reasons = reasons
+                review.reviewer_notes = (
+                    (review.reviewer_notes or "").rstrip()
+                    + f"\n[熔断归档] 该洞累计 {review.uncertain_attempts} 次未证实，"
+                    "已停止自动重审，转人工判断。"
+                ).strip()
+                self._emit("review_uncertain_capped",
+                           title=finding.title,
+                           attempts=review.uncertain_attempts)
 
         self._emit(
             "review_done",

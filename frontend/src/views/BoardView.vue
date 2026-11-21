@@ -2166,6 +2166,15 @@ function parseEventTs(ts) {
             </div>
             <div class="meta">{{ f.vuln_type }} · {{ f.target_url }}</div>
             <div class="meta rr-time">发现 {{ fmtLocalTime(f.created_at) }}<template v-if="f.llm_model"> · 模型 {{ f.llm_model }}</template></div>
+            <div class="meta rr-note">
+              <span v-if="f.review_verdict === 'deepen'" class="mini-tag warn">
+                审核 {{ f.uncertain_attempts || 1 }} 次未证实
+              </span>
+              <span v-else-if="f.review_verdict === 'ignored'" class="mini-tag">AI 判非漏洞</span>
+              <span v-if="!f.reproduced" class="mini-tag muted">复现未通过</span>
+              <span v-else class="mini-tag ok">复现已通过</span>
+              <span v-if="f.uncertain_attempts >= 2" class="mini-tag danger">已熔断归档</span>
+            </div>
             <div v-if="f.ignore_reasons?.length" class="meta rr-note">AI 理由：{{ f.ignore_reasons.join("；") }}</div>
           </div>
           <div class="rr-side" @click.stop>

@@ -535,6 +535,12 @@ async def archived_list(task_id: str, search: Optional[str] = Query(None, alias=
             )
         d["ignore_reasons"] = r.ignore_reasons or []
         d["deepen_directive"] = r.deepen_directive or ""
+        # 让界面能解释「为什么进未采纳」而不是只显示一个「未证实」：
+        # 未证实次数 + 复现是否通过 + 审核结论，三件缺一不可。
+        d["uncertain_attempts"] = int(getattr(r, "uncertain_attempts", 0) or 0)
+        d["reproduced"] = bool(r.reproduced)
+        d["review_verdict"] = r.verdict
+        d["review_confidence"] = r.confidence
         return d
 
     # 有搜索时：DB 层无法覆盖全文匹配（跨报告正文/理由等 JSON 字段），仍需取全量再过滤，
@@ -589,6 +595,46 @@ async def restore_archived(finding_id: str, session: AsyncSession = Depends(get_
         f.status = "reviewed"
     await session.commit()
     return {"ok": True, "id": finding_id}
+
+
+@router.post("/tasks/{task_id}/archived/settle")
+async def settle_stuck_uncertain(task_id: str,
+                                 cap: int = Query(2, ge=1, le=10),
+                                 session: AsyncSession = Depends(get_session)):
+    """把「反复未证实」卡在 deepen 的洞一次性收进 AI 未采纳（历史存量兜底）。
+
+    背景：同一个洞被 AI 反复判「未证实 → deepen」，既进不了人工复审，也进不了
+    未采纳，界面上只见一个「未证实」，用户视角就是洞被吞了。审核器已加熔断
+    （第二次未证实即归档），这个接口负责把**历史遗留**的那些一次性收敛。
+    只处理 verdict=deepen 且 reproduced=False 的；accepted 一律不动。
+    """
+    rows = (await session.execute(
+        select(Finding, Review).join(Review, Review.finding_id == Finding.id).where(
+            Finding.task_id == task_id,
+            Review.verdict == "deepen",
+            Review.reproduced == False,  # noqa: E712
+        )
+    )).all()
+    settled = 0
+    for f, r in rows:
+        attempts = int(getattr(r, "uncertain_attempts", 0) or 0)
+        if attempts < cap:
+            continue
+        r.verdict = "ignored"
+        r.severity_final = r.severity_final or f.severity_claimed or "中危"
+        reasons = list(r.ignore_reasons or [])
+        reasons.insert(0, (
+            f"已累计 {attempts} 次「未证实」（复现未通过），收进 AI 未采纳供人工判定是否误杀"
+        ))
+        r.ignore_reasons = reasons
+        r.reviewer_notes = (
+            (r.reviewer_notes or "").rstrip()
+            + f"\n[熔断归档] 累计 {attempts} 次未证实，已停止自动重审，转人工判断。"
+        ).strip()
+        settled += 1
+    if settled:
+        await session.commit()
+    return {"settled": settled, "scanned": len(rows), "cap": cap}
 
 
 @router.get("/tasks/{task_id}/killsweeps")

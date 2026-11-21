@@ -203,6 +203,9 @@ class Review(Base):
     reviewer_notes: Mapped[str] = mapped_column(Text, default="")
     deepen_directive: Mapped[str] = mapped_column(Text, default="")  # verdict=deepen 时的深挖指令
     reviewed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # 同一漏洞被"未证实"打回的累计次数。达到阈值后强制进 AI 未采纳，不再无限重审。
+    # 按 dedup_key 的语义组累计（跨 finding 版本），避免换个标题就重置计数。
+    uncertain_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     # ===== 用户复审（人工二次审核，仅 AI accepted 进入）=====
     # pending=待复审 / passed=通过(进待提交) / rejected=不通过

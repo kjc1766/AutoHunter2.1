@@ -4160,3 +4160,20 @@ main {
 .arch-group .cluster-variants-head:hover {
   color: #374151;
 }
+
+/* ===== AI 未采纳：审核状态标签 ===== */
+.mini-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  margin-right: 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 16px;
+  background: #eef2f7;
+  color: #4b5563;
+  border: 1px solid #dbe2ea;
+}
+.mini-tag.warn { background: #fff7e6; color: #b45309; border-color: #f6d59a; }
+.mini-tag.danger { background: #fee9e9; color: #b91c1c; border-color: #f5b5b5; }
+.mini-tag.ok { background: #e9f7ef; color: #047857; border-color: #a7d9c1; }
+.mini-tag.muted { background: #f3f4f6; color: #6b7280; border-color: #e2e5ea; }
