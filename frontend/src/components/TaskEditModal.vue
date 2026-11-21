@@ -209,7 +209,7 @@ let redlineLoaded = false;
 async function loadRedlineCatalog() {
   if (redlineLoaded) return;
   try {
-    redlineCatalog.value = await api.get("/tasks/redline-catalog");
+    redlineCatalog.value = await api.redlineCatalog();
     redlineLoaded = true;
   } catch (e) {
     redlineCatalog.value = [];
@@ -482,6 +482,7 @@ async function save() {
           <span class="redline-text">
             <b>{{ r.title }}</b>
             <em>{{ r.desc }}</em>
+            <i class="redline-rule">（{{ r.rule }}）</i>
           </span>
         </label>
       </div>

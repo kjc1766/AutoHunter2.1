@@ -281,6 +281,8 @@ async function uploadBackup(file, includeWork) {
 }
 
 export const api = {
+  // 可选红线目录（新建/编辑任务时渲染勾选框）。静态目录，不含鉴权敏感信息。
+  redlineCatalog: () => req("GET", "/api/tasks/redline-catalog"),
   listTasks: () => req("GET", "/api/tasks"),
   createTask: (data) => req("POST", "/api/tasks", data),
   getTask: (id) => req("GET", `/api/tasks/${id}`),

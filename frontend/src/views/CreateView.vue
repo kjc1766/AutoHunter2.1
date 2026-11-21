@@ -296,7 +296,7 @@ async function submit() {
 onMounted(async () => {
   // 红线目录（静态，失败不影响创建）
   try {
-    redlineCatalog.value = await api.get("/tasks/redline-catalog");
+    redlineCatalog.value = await api.redlineCatalog();
   } catch (e) {
     redlineCatalog.value = [];
   }
@@ -506,6 +506,7 @@ onMounted(async () => {
               <span class="redline-text">
                 <b>{{ r.title }}</b>
                 <em>{{ r.desc }}</em>
+                <i class="redline-rule">（{{ r.rule }}）</i>
               </span>
             </label>
             <p v-if="!redlineCatalog.length" class="create-mini">红线目录加载中…</p>
