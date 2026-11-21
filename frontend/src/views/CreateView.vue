@@ -8,6 +8,7 @@ import LlmPoolEditor from "../components/LlmPoolEditor.vue";
 
 const router = useRouter();
 const adv = ref(false);
+const redlineCatalog = ref([]);
 const form = reactive({
   name: "",
   src_type: "edusrc",
@@ -18,6 +19,7 @@ const form = reactive({
   intent_mode: "",
   manual_targets: "",
   src_rules: "",
+  redline_checks: [],
   // inherit | single | pool
   model_mode: "inherit",
   base_url: "", api_key: "", key_ref: "", model: "", protocol: "auto", prompt_version: "legacy",
@@ -277,6 +279,7 @@ async function submit() {
     manual_targets: form.manual_targets.split("\n").map((s) => s.trim()).filter(Boolean),
     auth_bindings: showAuthBindings.value ? exportAuthBindings() : [],
     src_rules: form.src_rules,
+    redline_checks: form.redline_checks || [],
     concurrency: parseInt(form.concurrency) || 3,
     deepen_cap: Math.max(0, Math.min(parseInt(form.deepen_cap) || 0, 10)),
     auto_killsweep: form.auto_killsweep !== false,
@@ -291,6 +294,12 @@ async function submit() {
 }
 
 onMounted(async () => {
+  // 红线目录（静态，失败不影响创建）
+  try {
+    redlineCatalog.value = await api.get("/tasks/redline-catalog");
+  } catch (e) {
+    redlineCatalog.value = [];
+  }
   try {
     const s = await api.getSettings();
     if (!form.base_url) form.base_url = s.llm?.base_url || "";
@@ -484,6 +493,23 @@ onMounted(async () => {
           </header>
           <label class="create-sr-only" for="src-rules">SRC 规则</label>
           <textarea id="src-rules" v-model="form.src_rules" rows="3" placeholder="例：本校不收弱口令；重点收越权与未授权。"></textarea>
+        </section>
+
+        <section class="create-block">
+          <header class="create-block-head">
+            <b>红线勾选（可选）</b>
+            <small>勾上后本任务严格执行；系统内置红线（禁全量脱库/禁扫描器心智）始终生效，不在此列</small>
+          </header>
+          <div class="redline-block">
+            <label v-for="r in redlineCatalog" :key="r.id" class="redline-item">
+              <input type="checkbox" :value="r.id" v-model="form.redline_checks" />
+              <span class="redline-text">
+                <b>{{ r.title }}</b>
+                <em>{{ r.desc }}</em>
+              </span>
+            </label>
+            <p v-if="!redlineCatalog.length" class="create-mini">红线目录加载中…</p>
+          </div>
         </section>
 
         <details class="create-block create-adv" :open="adv" @toggle="adv = $event.target.open">
