@@ -488,13 +488,18 @@ async def archived_list(task_id: str, search: Optional[str] = Query(None, alias=
     其余描述放在 variants 里。实测 29 条归档只有 9 个独立洞（鑫贝帝一个洞占 11 条）。
     折叠只影响展示，不改任何 finding 的 verdict/status，逐条操作能力保留在 variants 内。
 
+    「深挖回炉中」(status=superseded) 的条目**也一并显示**，并在线上标注状态。
+    早先这里用 `status != 'superseded'` 把回炉前身排除，本意是避免和新一轮重复；
+    但复位依赖“深挖 target 走到终态时顺带触发”，一旦漏触发（target 被删/重建/
+    deepen_context 丢失），前身会永久卡在 superseded，对所有人工面板不可见——
+    实测出现严重级 SQL 注入被静默吞掉。宁可多显示一条，也不能让洞消失。
+
     支持分页（limit/offset）：量大时前端一次拉 50 条、滚动加载更多，避免一次全量拉取卡顿。
     搜索走服务端（q），保证跨全部页命中而不是只在已加载页里搜。"""
     q = select(Finding, Review).join(Review, Review.finding_id == Finding.id).where(
         Finding.task_id == task_id,
         Review.verdict.in_(["ignored", "deepen"]),
         Review.user_status == "pending",   # 用户已处理过的不再摆进来
-        Finding.status != "superseded",    # 正在回炉重挖的 deepen 前身不显示（避免和新一轮重复）
     ).order_by(
         # 写/删类置顶（用户最容易在这里漏看真洞），其次 deepen，再是 ignored
         case((or_(
