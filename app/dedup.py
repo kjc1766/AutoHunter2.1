@@ -38,6 +38,13 @@ _VULN_TYPE_ALIASES: dict[str, tuple[str, ...]] = {
         "无授权", "无需鉴权", "鉴权缺失", "认证缺失", "missingauth", "authbypass",
         "认证绕过", "授权绕过", "未鉴权",
     ),
+    # 签名/凭证伪造：同类产量熔断要把「签名绕过」的多种说法归到同一桶，
+    # 否则一个洞写成「前端硬编码签名盐」、另一个写成「sign 可伪造」会各占一桶，熔断失效。
+    "signature_bypass": (
+        "签名绕过", "签名校验绕过", "伪造签名", "伪造sign", "signbypass",
+        "signaturebypass", "硬编码密钥", "硬编码签名", "hardcodedsecret",
+        "hardcodedkey", "webhooksign",
+    ),
     "sql_injection": (
         "sqlinjection", "sqli", "sql注入", "注入sql", "sql",
     ),

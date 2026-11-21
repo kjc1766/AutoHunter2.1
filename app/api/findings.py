@@ -541,6 +541,14 @@ async def archived_list(task_id: str, search: Optional[str] = Query(None, alias=
         d["reproduced"] = bool(r.reproduced)
         d["review_verdict"] = r.verdict
         d["review_confidence"] = r.confidence
+        # 同类产量熔断标记：worker 判"这类已够量，剩余交给人工深挖"时打上。
+        # UI 据此渲染「可深挖」徽标 + 深挖按钮。
+        ev = f.evidence or {}
+        if isinstance(ev, dict) and ev.get("deepen_suggested"):
+            d["deepen_suggested"] = True
+            d["deepen_reason"] = ev.get("deepen_reason") or ""
+            d["deepen_class"] = ev.get("deepen_class") or ""
+            d["deepen_hits"] = ev.get("deepen_hits") or 0
         return d
 
     # 有搜索时：DB 层无法覆盖全文匹配（跨报告正文/理由等 JSON 字段），仍需取全量再过滤，

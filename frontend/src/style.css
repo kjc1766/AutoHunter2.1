@@ -4177,3 +4177,6 @@ main {
 .mini-tag.danger { background: #fee9e9; color: #b91c1c; border-color: #f5b5b5; }
 .mini-tag.ok { background: #e9f7ef; color: #047857; border-color: #a7d9c1; }
 .mini-tag.muted { background: #f3f4f6; color: #6b7280; border-color: #e2e5ea; }
+.mini-tag.deepen { background: #eef4ff; color: #1d4ed8; border-color: #b7cdf5; }
+.mini-action.deepen-btn { background: #eef4ff; border-color: #b7cdf5; color: #1d4ed8; }
+.mini-action.deepen-btn:hover { background: #dbe8ff; }

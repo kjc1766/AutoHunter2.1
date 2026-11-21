@@ -38,6 +38,11 @@ from app.tools.schemas import (
 
 _BROAD_NMAP_RE = re.compile(r"\bnmap\b[\s\S]*(?:-p\s*(?:-|1-10000|1-65535|0-65535)|--top-ports\s+\d{3,})", re.IGNORECASE)
 _SLEEP_RE = re.compile(r"\bsleep\s+(\d+)", re.IGNORECASE)
+# 同类漏洞产量熔断：同一个语义大类（sqli / unauthorized_access / weak_cred …）
+# 命中 quota 条后，worker 不再继续在该类上耗轮次——写够报告即可，剩下的交给人工点「深挖」。
+# 实测同一个 rprOrder SQL 注入被写出 10 个变体、鑫贝帝弱口令 15 个变体，
+# 后 8~13 条对最终报告没有增量，纯烧 token。
+VULN_CLASS_QUOTA = int(os.environ.get("VULN_CLASS_QUOTA", "2"))
 _FOR_LIST_RE = re.compile(r"\bfor\s+\w+\s+in\s+([^;\n]+);", re.IGNORECASE)
 # 循环项像「注入/绕过 payload」而不是「路径/子域」的特征：
 # 引号、SQL 关键字、逻辑运算符、注释符、编码站点。
@@ -102,6 +107,11 @@ class Worker:
         self._cookie_hub = CookieHub(self.task_id, target)
         self.executor._cookie_hub = self._cookie_hub
         self.findings: list[Finding] = []
+        # 同类漏洞命中计数（按语义大类）。达到 quota 后 worker 停止继续挖同类、
+        # 只写报告并标记"可深挖"，省 token。见 _vuln_class_quota_exceeded。
+        self._class_hits: dict[str, int] = {}
+        # 已经触发过熔断的类别：重复命中时只提示停止，不再重复建议深挖
+        self._class_capped: set[str] = set()
         self.on_event = on_event or (lambda kind, data: None)
         self._finished: Optional[dict] = None
         # 审核打回的定向深挖任务：{directive, vuln_type, original_title, original_summary}
@@ -1591,6 +1601,41 @@ class Worker:
         self._emit("coverage_reported", route=record["route"], summary=summary[:180], endpoints=len(endpoints))
         return {"ok": True, "message": "覆盖记录已记下，后续同站 worker 会看到摘要。继续补盲区或 finish。"}
 
+    def _vuln_class_of(self, finding: Finding) -> str:
+        """取该漏洞的语义大类，用于同类产量熔断。
+
+        必须与 dedup 用同一套归一（normalize_vuln_type），不能用 semantic_class：
+        后者按关键词匹配，'sqli' 这种简称会漏成 'other'，回退后与 'SQL注入'
+        折出的 'sqli' 分属两桶，熔断就会失效（实测 'SQL注入'→sqli 但
+        'sqli'→sql_injection）。统一走 dedup 保证同桶。
+        """
+        vt = dedup.normalize_vuln_type(finding.vuln_type or "")
+        if vt:
+            return vt
+        # vuln_type 为空时退回标题里的语义大类
+        from app.cluster import semantic_class
+        try:
+            sem = semantic_class(finding.title or "")
+        except Exception:
+            sem = ""
+        return sem if sem and sem != "other" else "other"
+
+    def _report_deepen_suggestion(self, finding: Finding, cls: str, hits: int) -> None:
+        """把「该类已够量、建议人工深挖」标记到 finding 的 evidence 上，供 UI 渲染深挖按钮。"""
+        try:
+            ev = dict(finding.evidence or {})
+            ev["deepen_suggested"] = True
+            ev["deepen_reason"] = (
+                f"同类（{cls}）已命中 {hits} 条，已停止继续枚举；"
+                "如需扩大战果可点「深挖」派生定向 worker。"
+            )
+            ev["deepen_class"] = cls
+            ev["deepen_hits"] = hits
+            finding.evidence = ev
+        except Exception:
+            pass
+        self._emit("deepen_suggested", title=finding.title, vuln_class=cls, hits=hits)
+
     def _submit_finding(self, args: dict) -> dict:
         """Pydantic 兜底校验（双保险），失败返回错误让模型修正。"""
         try:
@@ -1652,7 +1697,42 @@ class Worker:
             vuln_type=finding.vuln_type,
             finding=finding.model_dump(mode="json"),
         )
-        return {"ok": True, "message": f"已收录漏洞「{finding.title}」（{finding.severity_claimed.value}）。可继续挖其它漏洞或调用 finish。"}
+
+        # 同类产量熔断：命中 quota 后不再继续枚举同类接口，只写报告 + 标记可深挖。
+        # 这样 worker 把剩余轮次让给别的漏洞类型，而不是在同一类上刷变体烧 token。
+        cls = self._vuln_class_of(finding)
+        self._class_hits[cls] = self._class_hits.get(cls, 0) + 1
+        hits = self._class_hits[cls]
+        if hits >= VULN_CLASS_QUOTA:
+            self._report_deepen_suggestion(finding, cls, hits)
+            already = cls in self._class_capped
+            self._class_capped.add(cls)
+            if not already:
+                self._emit("vuln_class_capped", vuln_class=cls, hits=hits, quota=VULN_CLASS_QUOTA)
+            return {
+                "ok": True,
+                "message": (
+                    f"已收录漏洞「{finding.title}」（{finding.severity_claimed.value}）。"
+                    f"【产量已达上限】同类（{cls}）已命中 {hits} 条，禁止继续枚举同一类接口/参数；"
+                    "本条已标记为「可深挖」，人工可点深挖派生定向 worker。"
+                    "请把剩余轮次用于其它漏洞类型；没有其它方向就直接 finish。"
+                ),
+                "vuln_class": cls,
+                "class_hits": hits,
+                "class_capped": True,
+                "deepen_suggested": True,
+            }
+
+        return {
+            "ok": True,
+            "message": (
+                f"已收录漏洞「{finding.title}」（{finding.severity_claimed.value}）。"
+                f"同类（{cls}）已累计 {hits}/{VULN_CLASS_QUOTA} 条，"
+                "再命中同类即触发产量上限，请优先换其它漏洞类型。"
+            ),
+            "vuln_class": cls,
+            "class_hits": hits,
+        }
 
     def _weak_write_evidence_reason(self, finding: Finding) -> str:
         """拦截 EduSRC 最常见半成品：写接口返回成功但影响 0 行。

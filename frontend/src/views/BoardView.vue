@@ -40,6 +40,25 @@ function toggleArchGroup(id) {
 function archExpanded(id) {
   return expandedArchGroups.value.has(id);
 }
+
+// 同类产量熔断后的「深挖」：把该洞对应目标带定向指令重新入队。
+// 指令默认带上熔断时记录的类别与已命中数，人工可改写。
+async function promptDeepen(f) {
+  const cls = f.deepen_class || "";
+  const hits = f.deepen_hits || 0;
+  const def = cls
+    ? `同类（${cls}）已命中 ${hits} 条，请基于本条继续深挖：把利用链打穿到可交付危害，不要重复枚举同类接口。`
+    : "请基于本条继续深挖：把利用链打穿到可交付危害。";
+  const directive = window.prompt("深挖指令（告诉 worker 这一轮去打穿什么）", def);
+  if (!directive || !directive.trim()) return;
+  try {
+    const r = await api.post(`/results/${f.id}/deepen`, { directive: directive.trim() });
+    toast(r?.message || "已派发深挖");
+    await refreshAll();
+  } catch (e) {
+    toast(`深挖失败：${e?.response?.data?.detail || e.message}`);
+  }
+}
 const expandedKillsweeps = ref(new Set());
 const searchDraft = ref("");
 const searchText = ref("");
@@ -2174,11 +2193,15 @@ function parseEventTs(ts) {
               <span v-if="!f.reproduced" class="mini-tag muted">复现未通过</span>
               <span v-else class="mini-tag ok">复现已通过</span>
               <span v-if="f.uncertain_attempts >= 2" class="mini-tag danger">已熔断归档</span>
+              <span v-if="f.deepen_suggested" class="mini-tag deepen"
+                    :title="f.deepen_reason">可深挖 · 同类已命中 {{ f.deepen_hits }} 条</span>
             </div>
             <div v-if="f.ignore_reasons?.length" class="meta rr-note">AI 理由：{{ f.ignore_reasons.join("；") }}</div>
           </div>
           <div class="rr-side" @click.stop>
             <span class="score">{{ f.review?.score ?? "-" }}</span>
+            <button v-if="f.deepen_suggested && !readonly" class="mini-action deepen-btn"
+                    type="button" @click="promptDeepen(f)">深挖</button>
             <button v-if="!readonly" class="mini-action" type="button" @click="restoreArchived(f.id)">恢复到复审</button>
           </div>
         </div>
