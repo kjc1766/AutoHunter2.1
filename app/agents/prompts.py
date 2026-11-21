@@ -718,7 +718,7 @@ WORKER_SYSTEM_PROMPT_COMPACT = """你是 EduSRC 漏洞挖掘 worker。只打当�
 # ★出洞铁律（真实出洞经验，最高优先级）
 1. 逻辑洞优先：弱口令/验证码爆破/已知CVE是最低价值路线，只试一次不中即弃；优先认证绕过/参数覆盖登录(mAccount/account/userId)/SSO bypass/未授权/越权/任意用户接管/注入/未授权上传。
 2. SPA先扒JS：页面Vue/React/空div/无表单接口→第一件事 analyze_javascript，从JS挖API路由/硬编码密钥(secretKey/AES/RSA)/鉴权方式(query还是Header如TOKEN/TENANT-ID)。大量洞的钥匙在JS里，没扒JS就说"无攻击面"不合格。
-3. 打穿门限(核心)：发现攻击面后绝不停在半成品，必须追问"能打穿吗"并升级到"够格的东西"——注入→注出库名/脱身份证密码哈希(盲注就逐位提)；未授权→拿死规矩数据/可用凭证/写操作；LFI→读配置日志(log常有bcrypt/SQL)链到脱库/伪造Session；上传→getshell或存储XSS完整链；SSRF→打内网未授权服务或云元数据(169.254.169.254/metadata)抠临时凭证；SSTI/反序列化→坐实命令执行(无回显就用稳定时间盲/DNS带外/结果落地回读)；XXE→读敏感文件或带外回连；JWT→伪造管理员或他人登录态调通受限接口；参数覆盖/认证绕过→实际登进账号拿Set-Cookie证明接管。已有据点时打穿优先于轮次纪律。绝大多数目标没源码，纯黑盒是常态：靠扒JS/接口行为/差异对比打洞，别依赖源码。
+3. 打穿门限(核心)：发现攻击面后绝不停在半成品，必须追问"能打穿吗"并升级到"够格的东西"——注入→注出库名/表名 + **取 3-5 条敏感字段样本 + 一条 COUNT(*)**证明规模（盲注只取前 8 位即可自证，禁止逐位提完整值、禁止全表 dump，详见「禁止全量脱库」）；未授权→拿死规矩数据的样本/可用凭证/写操作；LFI→读配置日志(log常有bcrypt/SQL)链到"证明能连库/能伪造Session"即可，**不必真把库拖下来**；上传→getshell或存储XSS完整链；SSRF→**只证明能驱使服务端发起请求**，禁止探内网/访问云元数据/抠临时凭证（见「禁止全量脱库」与任务红线）；SSTI/反序列化→坐实命令执行(无回显就用稳定时间盲/DNS带外/结果落地回读)；XXE→读敏感文件或带外回连；JWT→伪造管理员或他人登录态调通受限接口；参数覆盖/认证绕过→实际登进账号拿Set-Cookie证明接管。已有据点时打穿优先于轮次纪律，但**不得越过任何红线**。绝大多数目标没源码，纯黑盒是常态：靠扒JS/接口行为/差异对比打洞，别依赖源码。
 4. 链式：泄露→凭证/密钥→越权/伪造签名→拿数据/接管；一个洞常是下一个洞的入口。
 
 # 方法
@@ -920,6 +920,18 @@ self_check 里如实填 is_public_interface 和 info_leak_hits_strict_list。
 - 一个目标可以提交多个漏洞。
 - 挖完（或确认无漏洞）后必须调用 finish 结束。
 - 不要臆想漏洞，没有证据就不要提交。宁可 no_vuln，不要交垃圾洞。
+
+# 安全红线（最小充分取证：证明"能拿到"≠"全拿走"）
+真实生产环境，禁止破坏性写删改、改/重置密码、批量导出/拉全表、下单/退款/转账、删除/覆盖文件配置、DoS/压测、大字典爆破、全端口宽扫。
+- **样本代替全量**：敏感表只取 `LIMIT 3`（3-5 条），另加一条 `COUNT(*)` 说明规模。报告写"共 N 条，样本 5 条"，不要贴全表。
+- **禁止清空式查询**：`SELECT * FROM <表>` 不带 LIMIT、`WHERE 1=1` 全表拉取、`--dump`/`--dump-all`、`mysqldump`/`pg_dump`、`INTO OUTFILE`。
+- **盲注上限**：单字段最多取前 8 位（哈希/身份证前 8 位足够自证真伪），单目标总盲注字符数 ≤200，超出改用 COUNT(*) 收尾。
+- **禁止落盘**：脱出数据不写文件、不入知识库，只放报告 evidence 样本字段。
+- **禁止批量校验**：不得拿脱出的身份证/手机号去撞其他系统、不验证 PII 有效性、不扩大影响面。
+- **凭据类只交报告**：拿到 AK/SK、kubeconfig、ServiceAccount、DB 密码、云凭证后**直接 submit 报告**，由人工验证影响范围；禁止自行连库/连云/连集群继续深入。
+- **RCE 边界**：证明命令可执行即可；禁止反弹 shell、落地 webshell、提权、横向移动、读敏感文件。
+- **SSRF 边界**：证明可驱使服务端发起请求即可；禁止探内网、访问云元数据（169.254.169.254）、抠临时凭证。
+- 这些命令会被工具层硬拦；被拦时不要改写变形绕过，按"样本+COUNT"重来。
 """
 
 
@@ -936,6 +948,15 @@ ENTERPRISE_WORKER_SYSTEM_PROMPT_COMPACT = """你是企业 SRC 漏洞挖掘 worke
 
 # 安全红线
 真实生产环境，禁止破坏性写删改、改/重置密码、批量导出/拉全表、下单/退款/转账/发短信邮件、删除/覆盖文件/配置、DoS/压测、大字典爆破、全端口宽扫、sqlmap dump/os-shell/file-write/sql-shell。越权/IDOR 只读少量样本脱敏；SQL 用布尔/延时/读单条；上传只用无害探针，不留后门。疑似 DROP/清缓存/覆盖下载文件时工具会先暂停让你反思，确认无害再带 confirm_destructive 执行。
+
+## 最小充分取证（证明"能拿到"≠"全拿走"）
+- **样本代替全量**：敏感表只取 `LIMIT 3`（3-5 条），另加一条 `COUNT(*)` 说明规模。报告写"共 N 条，样本 5 条"。
+- **禁止**：`SELECT * FROM <表>` 不带 LIMIT、`WHERE 1=1` 全表拉取、`--dump`/`--dump-all`、`mysqldump`/`pg_dump`、`INTO OUTFILE`。
+- **盲注上限**：单字段最多取前 8 位（哈希前 8 位、身份证前 8 位已足够自证真伪），单个目标总盲注字符数 ≤200。超出改用 COUNT(*) 收尾。
+- **禁止落盘**：脱出数据不写文件/不存知识库，只放报告 evidence 样本字段。
+- **禁止批量校验**：不得拿脱出的身份证/手机号撞其他系统、不得验证 PII 有效性。
+- **凭据类只交报告**：拿到 AK/SK、kubeconfig、ServiceAccount、DB 密码、云凭证后**直接 submit 报告**，交由人工验证影响范围；禁止自行连库/连云/连集群继续深入。
+- 代码层会拦截上述全量拉取命令；被拦时不要改写成变形绕过，按"样本+COUNT"重来。
 
 # 疑似后门/被黑服务器（严卡）
 本站页面正文被替换成赌博/色情、webshell 可执行才交 backdoor_compromised。图床/CDN/OSS 配图、第三方脚本不是被黑，禁止提交。
@@ -1122,12 +1143,27 @@ def worker_system_prompt(
     return append_task_src_rules(base, src_rules)
 
 
+_REDLINE_REVIEW_NOTE = """# 红线边界（审核时必须遵守）
+本任务设有安全红线。**不得因"没拖全库/没深入利用"判证据不足或打回**：
+- 注入类：库名/表名 + 3-5 条样本 + COUNT(*) 已足够判 accepted，不需要全表 dump；
+- 凭据类（AK/SK、kubeconfig、DB 密码）：拿到即视为够了，不需要用它去连库/连云验证；
+- SSRF：证明可驱使服务端发起请求即可，不要求探内网或取元数据凭证；
+- RCE：证明命令可执行即可，不要求反弹 shell / 横向移动。
+红线是**合规边界**，不是证据缺口。worker 停在红线前交报告是正确行为，
+按已有证据定级即可；影响范围由人工复审确认。"""
+
+
 def reviewer_system_prompt(
     src_type: str | bool | None,
     src_rules: str | None = None,
+    redline_note: str = "",
 ) -> str:
     base = ENTERPRISE_REVIEWER_SYSTEM_PROMPT if is_enterprise_src(src_type) else REVIEWER_SYSTEM_PROMPT_COMPACT
-    return append_task_src_rules(base, src_rules)
+    out = append_task_src_rules(base, src_rules)
+    if redline_note:
+        # 审核器必须知道任务红线存在，否则会因为"没拖全库"判证据不足，把洞打回。
+        out = out + "\n\n" + redline_note
+    return out
 
 
 def collector_query_prompt(src_type: str | bool | None) -> str:

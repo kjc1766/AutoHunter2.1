@@ -397,6 +397,7 @@ class Reviewer:
         enable_reproduce: bool = True,
         src_type: str = "edusrc",
         src_rules: str = "",
+        redline_note: str = "",
         cancel_event: Optional["threading.Event"] = None,
     ):
         self.llm = llm or LLMClient()
@@ -404,6 +405,7 @@ class Reviewer:
         self.enable_reproduce = enable_reproduce
         self.src_type = normalize_src_type(src_type)
         self.src_rules = src_rules or ""
+        self.redline_note = redline_note or ""
         self._last_llm_error = ""
         # 复现验证子进程的协作取消（超时/停止时传导杀进程组）
         self.cancel_event = cancel_event or threading.Event()
@@ -516,7 +518,7 @@ class Reviewer:
         finding_text = json.dumps(_review_finding_payload(finding), ensure_ascii=False, separators=(",", ":"))
         mode_name = "企业 SRC" if self.src_type == "enterprise" else "EduSRC"
         messages = [
-            {"role": "system", "content": reviewer_system_prompt(self.src_type, src_rules=self.src_rules)},
+            {"role": "system", "content": reviewer_system_prompt(self.src_type, src_rules=self.src_rules, redline_note=self.redline_note)},
             {"role": "user", "content": _REVIEW_STATIC_PREFIX},
             {"role": "user", "content": (
                 f"按 {mode_name} 标准审核并调用 submit_review：\n```json\n{finding_text}\n```"

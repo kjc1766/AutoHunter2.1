@@ -3553,7 +3553,16 @@ class TaskRunner:
             )
 
         def do_review() -> dict:
-            reviewer = Reviewer(llm=llm, on_event=emit, src_type=src_type, src_rules=src_rules)
+            # 任务设了红线时，审核器也要知道边界，否则会因"没拖全库"判证据不足打回。
+            from app.agents.prompts import _REDLINE_REVIEW_NOTE
+            _rl_note = ""
+            try:
+                if task_obj is not None and (task_obj.redline_checks or []):
+                    _rl_note = _REDLINE_REVIEW_NOTE
+            except Exception:
+                _rl_note = ""
+            reviewer = Reviewer(llm=llm, on_event=emit, src_type=src_type, src_rules=src_rules,
+                                redline_note=_rl_note)
             return reviewer.review(finding_schema).model_dump(mode="json")
 
         review_sem = agent_semaphore("review")
