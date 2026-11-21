@@ -61,6 +61,10 @@ def _set_sqlite_pragma(dbapi_connection, _connection_record):
 # 轻量自动迁移：新增列时无需删库（demo 友好）
 # (table, column, "TYPE DEFAULT ...")
 _MIGRATIONS = [
+    # 未证实计数：同一漏洞被"未证实"打回的次数，达阈值强制归档进 AI 未采纳。
+    # 必须放进自动迁移清单——漏了会让 ORM 查到不存在的列，
+    # 连带 _sweep_orphan_superseded 每次启动都报错（实测新服务器踩过）。
+    ("reviews", "uncertain_attempts", "INTEGER DEFAULT 0"),
     # 受阻状态（六分失败分类）：blocked 的目标进 waiting 而非 dead，记录挡住原因与解锁条件
     ("targets", "block_reason", "TEXT DEFAULT ''"),
     ("targets", "unblock_condition", "TEXT DEFAULT ''"),

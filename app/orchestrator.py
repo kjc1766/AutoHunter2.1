@@ -3325,16 +3325,23 @@ class TaskRunner:
         return origin_fid
 
     async def _maybe_sweep_orphan_superseded(self, session: AsyncSession) -> None:
-        """节流包装：兜底自愈每 5 分钟跑一次即可（全表扫 finding+target，不宜每轮都跑）。"""
+        """节流包装：兜底自愈每 5 分钟跑一次即可（全表扫 finding+target，不宜每轮都跑）。
+
+        注意：失败不推进节流计时器。否则首次失败（如新列迁移未跑完，报
+        no such column: reviews.uncertain_attempts）会被 5 分钟的冷却卡住，
+        期间所有滞留项都救不回来。失败后下一次循环立即重试。
+        """
         now_ts = _now().timestamp()
         last = getattr(self, "_last_orphan_sweep", 0.0)
         if now_ts - last < 300:
             return
-        self._last_orphan_sweep = now_ts
         try:
             await self._sweep_orphan_superseded(session)
         except Exception as e:
+            # 不更新 _last_orphan_sweep：下次循环立刻重试，避免迁移竞态被冷却放大
             logger.warning("orphan superseded sweep failed task=%s: %s", self.task_id[:8], e)
+            return
+        self._last_orphan_sweep = now_ts
 
     async def _sweep_orphan_superseded(self, session: AsyncSession) -> int:
         """兜底自愈：把「永久卡在 superseded」的深挖前身强制复位为 reviewed。
