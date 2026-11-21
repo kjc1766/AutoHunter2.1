@@ -883,6 +883,7 @@ class TaskRunner:
             # 若先 await refill，worker 会整段空转，看板也像「卡死」。
             self._reap_workers()
             await self._reclaim_stale(session)
+            await self._maybe_sweep_orphan_superseded(session)
             await self._revive_blocked(session)
             effective_cap = min(task.concurrency, WORKER_MAX_CONCURRENCY)
             free = effective_cap - len(self._active_workers)
@@ -975,6 +976,7 @@ class TaskRunner:
             # 3. 入队结束后再补一轮派发（吃掉本轮新进队列）
             self._reap_workers()
             await self._reclaim_stale(session)
+            await self._maybe_sweep_orphan_superseded(session)
             await self._revive_blocked(session)
             # task.concurrency 是用户在 UI 配的期望并发；worker 实际并发还受全局信号量
             # WORKER_MAX_CONCURRENCY 封顶。这里按两者取小来决定本轮 spawn 多少，避免多起
@@ -3321,6 +3323,70 @@ class TaskRunner:
                 + "\n[系统] 深挖回炉未升级，已复位原线索为可人工复审（深挖未果，疑似好洞）。"
             ).strip()
         return origin_fid
+
+    async def _maybe_sweep_orphan_superseded(self, session: AsyncSession) -> None:
+        """节流包装：兜底自愈每 5 分钟跑一次即可（全表扫 finding+target，不宜每轮都跑）。"""
+        now_ts = _now().timestamp()
+        last = getattr(self, "_last_orphan_sweep", 0.0)
+        if now_ts - last < 300:
+            return
+        self._last_orphan_sweep = now_ts
+        try:
+            await self._sweep_orphan_superseded(session)
+        except Exception as e:
+            logger.warning("orphan superseded sweep failed task=%s: %s", self.task_id[:8], e)
+
+    async def _sweep_orphan_superseded(self, session: AsyncSession) -> int:
+        """兜底自愈：把「永久卡在 superseded」的深挖前身强制复位为 reviewed。
+
+        为什么需要：_revive_deepen_origin 只在深挖 target 收尾时触发，一旦那次触发
+        没跑到（target 被删/重建导致 deepen_context 丢失、进程重启打断收尾、目标从未
+        进入终态），前身就永久挂在 superseded —— 而对所有人工面板不可见，等于静默吞洞。
+        实测出现过严重级 SQL 注入因此消失。
+
+        判据（保守，只救明显无主的）：
+        - finding.status == superseded 且 review.verdict == deepen
+        - 找不到仍指向它的 target（deepen_context.from_finding_id 无人引用）
+        或 该 target 早已是终态(dead/done)且深挖次数已用尽
+        复位后走 reviewed，落进「AI 未采纳」归档供人工复审。
+        """
+        rows = (await session.execute(
+            select(Finding, Review).join(Review, Review.finding_id == Finding.id).where(
+                Finding.task_id == self.task_id,
+                Finding.status == "superseded",
+                Review.verdict == "deepen",
+            )
+        )).all()
+        if not rows:
+            return 0
+        # 收集仍被 target 引用的深挖前身
+        live_refs: set[str] = set()
+        for tgt in (await session.execute(
+            select(Target).where(Target.task_id == self.task_id)
+        )).scalars().all():
+            dctx = tgt.deepen_context or {}
+            fid = (dctx.get("from_finding_id") or "").strip()
+            if not fid:
+                continue
+            # 只有「还在深挖中」的目标算活引用；已终态的不再保护前身
+            if tgt.status in ("queued", "waiting", "assigned", "scanning"):
+                live_refs.add(fid)
+        revived = 0
+        for f, r in rows:
+            if f.id in live_refs:
+                continue
+            f.status = "reviewed"
+            r.reviewer_notes = (
+                (r.reviewer_notes or "").rstrip()
+                + "\n[系统] 深挖前身长期滞留 superseded，已兜底复位为可人工复审。"
+            ).strip()
+            revived += 1
+        if revived:
+            await session.commit()
+            await self._log(session, "orchestrator", "orphan_superseded_revived",
+                            f"兜底复位 {revived} 个滞留 superseded 的深挖前身（防静默吞洞）",
+                            level="warn")
+        return revived
 
     @staticmethod
     def _apply_resume_context(tgt: Target, result: dict) -> None:
