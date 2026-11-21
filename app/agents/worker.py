@@ -88,6 +88,7 @@ class Worker:
         engine: str = "fofa",
         prompt_version: str | None = None,
         src_rules: str = "",
+        redline_checks: Any = None,
         pop_directive: Optional[Callable[[], Optional[str]]] = None,
         task_id: str = "",
     ):
@@ -98,6 +99,12 @@ class Worker:
         self.src_type = src_type
         self._enterprise = is_enterprise_src(src_type)
         self.src_rules = src_rules or ""
+        # 用户勾选的任务级红线，渲染成提示词片段拼在 system 末尾
+        try:
+            from app.redlines import render_redline_prompt
+            self.redline_prompt = render_redline_prompt(redline_checks)
+        except Exception:
+            self.redline_prompt = ""
         self.prompt_version = normalize_worker_prompt_version(prompt_version or worker_config.prompt_version)
         self.executor = ToolExecutor(
             target, cancel_event=self.cancel_event,
@@ -331,7 +338,8 @@ class Worker:
             )
             self._emit("worker_start", target=self.target, prompt_version=self.prompt_version)
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": worker_system_prompt(self.src_type, self.prompt_version, src_rules=self.src_rules)},
+            {"role": "system", "content": worker_system_prompt(self.src_type, self.prompt_version, src_rules=self.src_rules)
+             + (("\n\n" + self.redline_prompt) if self.redline_prompt else "")},
             {"role": "user", "content": _WORKER_STATIC_PREFIX},
             {"role": "user", "content": user_content},
         ]

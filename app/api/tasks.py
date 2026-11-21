@@ -19,6 +19,7 @@ from app.api.dto import (
 from app.agents import site_collab
 from app.agents.manual_targets import clean_manual_target_list
 from app.agents.prompts import normalize_src_type
+from app.redlines import REDLINE_CATALOG, normalize_redline_checks
 from app.db.models import Finding, Killsweep, Review, Target, Task, TaskEvent, to_cst_iso
 from app.db.session import get_session
 from app.engines.meter import engine_snapshot
@@ -304,6 +305,7 @@ def _task_to_dto(t: Task, stats: TaskStats | None = None,
         deepen_cap=clamp_deepen_cap(getattr(t, "deepen_cap", None)),
         auto_killsweep=getattr(t, "auto_killsweep", True) is not False,
         src_rules="" if observer else (t.src_rules or ""),
+        redline_checks=[] if observer else list(t.redline_checks or []),
         manual_targets=[] if observer else (t.manual_targets or []),
         auth_bindings=_public_auth_bindings(t, observer=observer),
         model_config_data=model_config,
@@ -481,6 +483,7 @@ async def create_task(req: CreateTaskRequest, session: AsyncSession = Depends(ge
     task = Task(
         name=req.name, src_type=normalize_src_type(req.src_type), vuln_types=req.vuln_types,
         src_rules=req.src_rules, target_source=req.target_source,
+        redline_checks=normalize_redline_checks(req.redline_checks),
         engine=engine_name, fofa_query=req.fofa_query,
         manual_targets=clean_manual_target_list(req.manual_targets or []),
         auth_bindings=_dump_auth_bindings(req.auth_bindings),
@@ -630,6 +633,20 @@ async def top_task(task_id: str, req: TaskTopRequest, session: AsyncSession = De
     return {"ok": True, "id": task.id, "is_top": task.is_top}
 
 
+@router.get("/redline-catalog")
+async def redline_catalog():
+    """可选红线目录：供新建任务时渲染勾选框。
+
+    这些是**用户可选的**行为边界（不同 SRC 项目要求不同）。
+    内置自身红线（禁止全量脱库/禁止扫描器心智/禁自毁环境）不在目录里，
+    它们永远生效，不受开关影响。
+    """
+    return [
+        {"id": x["id"], "title": x["title"], "desc": x["desc"], "rule": x["rule"]}
+        for x in REDLINE_CATALOG
+    ]
+
+
 @router.get("/hard-targets")
 async def global_hard_targets(
     request: Request,
@@ -739,6 +756,8 @@ async def update_task(task_id: str, req: UpdateTaskRequest, session: AsyncSessio
         task.vuln_types = [v.strip() for v in req.vuln_types if str(v).strip()]
     if req.src_rules is not None:
         task.src_rules = req.src_rules
+    if req.redline_checks is not None:
+        task.redline_checks = normalize_redline_checks(req.redline_checks)
     if req.target_source is not None:
         if req.target_source not in {"fofa", "manual", "both", "site"}:
             raise HTTPException(400, "target_source 必须是 fofa/manual/both/site")

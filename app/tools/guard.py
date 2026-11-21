@@ -70,6 +70,18 @@ _ENTERPRISE_DANGER_PATTERNS = [
 
 _ENTERPRISE_COMPILED = [(re.compile(p, re.IGNORECASE), msg) for p, msg in _ENTERPRISE_DANGER_PATTERNS]
 
+# 红线·禁止全量脱库：只拦"整表拉走"的明确特征，不拦正常样本查询。
+# 宁可放过带 LIMIT 的查询，也不能误杀真实验证——所以模式足够具体。
+_DUMP_ALL_PATTERNS = [
+    (r"sqlmap.*(?:--dump-all|--dump\b|--sql-shell|--os-shell)", "sqlmap 脱库/交互模式"),
+    (r"mysqldump\s+(?:-\S+\s+)*[^|\s]+\s+[^\s;|]+", "mysqldump 整库导出"),
+    (r"pg_dump\s+", "pg_dump 整库导出"),
+    (r"select\s+\*\s+from\s+[`\"\w.]+\s*(?:;|'|\"|$)", "SELECT * FROM 表（无 WHERE/LIMIT）"),
+    (r"select\s+.{0,80}\s+from\s+[`\"\w.]+\s+where\s+1\s*=\s*1", "WHERE 1=1 全表拉取"),
+    (r"into\s+outfile", "SELECT INTO OUTFILE 落盘"),
+]
+_DUMP_ALL_COMPILED = [(re.compile(p, re.IGNORECASE), why) for p, why in _DUMP_ALL_PATTERNS]
+
 # 全模式：疑似对目标造成不可逆损害时先暂停，让模型反思确认后再执行（Issue #30）。
 # 不永久硬拦。不拦：IDOR 的 DELETE /api/x?id=…、自建 SRC_TEST_ 哨兵、布尔/延时 SQLi。
 # 自毁本机/容器、企业生产红线仍硬拦。
@@ -198,3 +210,14 @@ def check_command(
                 raise CommandBlocked(
                     f"企业生产环境危险操作被拦截：{msg} 请改为非破坏性的存在性验证。"
                 )
+    # 红线·禁止全量脱库（代码层兜底，防模型无视提示词文本约束）：
+    # 证明"能拿到"不需要"全拿走"。命中全量拉取特征时直接拦截，要求改用样本+COUNT。
+    for pat, why in _DUMP_ALL_COMPILED:
+        if pat.search(cmd):
+            from app.tools.executor import MAX_DUMP_ROWS
+            raise CommandBlocked(
+                f"红线拦截：疑似全量脱库（{why}）。证明危害不需要拖库——"
+                f"请改用 `LIMIT 3` 取 3-5 条样本，另加一条 `SELECT COUNT(*)` 说明规模"
+                f"（单次取数上限 {MAX_DUMP_ROWS} 行）。"
+                "敏感表禁止 --dump/--dump-all、SELECT * 无 LIMIT、盲注逐位提完整值。"
+            )

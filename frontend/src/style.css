@@ -4180,3 +4180,38 @@ main {
 .mini-tag.deepen { background: #eef4ff; color: #1d4ed8; border-color: #b7cdf5; }
 .mini-action.deepen-btn { background: #eef4ff; border-color: #b7cdf5; color: #1d4ed8; }
 .mini-action.deepen-btn:hover { background: #dbe8ff; }
+
+/* ===== 任务级红线勾选 ===== */
+.redline-block {
+  margin: 14px 0;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+.redline-head {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 10px;
+  color: #1f2937;
+}
+.redline-note {
+  display: block;
+  font-weight: 400;
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 3px;
+}
+.redline-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 0;
+  cursor: pointer;
+  border-top: 1px dashed #eceff3;
+}
+.redline-item:first-of-type { border-top: none; }
+.redline-item input { margin-top: 2px; flex: none; }
+.redline-text { display: flex; flex-direction: column; gap: 2px; }
+.redline-text b { font-size: 13px; color: #111827; font-weight: 600; }
+.redline-text em { font-style: normal; font-size: 11.5px; color: #6b7280; }

@@ -5,6 +5,7 @@ import { useAuthBindings, emptyBinding } from "../composables/useAuthBindings.js
 import LlmModelPicker from "./LlmModelPicker.vue";
 import LlmPoolEditor from "./LlmPoolEditor.vue";
 
+const redlineCatalog = ref([]);
 const props = defineProps({
   open: Boolean,
   task: Object,
@@ -55,6 +56,7 @@ const form = reactive({
   intent_mode: "",
   manual_targets: "",
   src_rules: "",
+  redline_checks: [],
   base_url: "",
   api_key: "",
   key_ref: "",
@@ -138,6 +140,7 @@ function fill(task) {
   form.intent_mode = fofaCfg.intent_mode || "";
   form.manual_targets = (task.manual_targets || []).join("\n");
   form.src_rules = task.src_rules || "";
+  form.redline_checks = Array.isArray(task.redline_checks) ? [...task.redline_checks] : [];
   form.base_url = modelCfg.base_url || "";
   form.api_key = "";
   form.key_ref = modelCfg.key_ref || "";
@@ -197,8 +200,21 @@ watch(() => props.open, (open) => {
   if (open) {
     fill(props.task);
     if (modelMode.value === "single") loadModels();
+    loadRedlineCatalog();
   }
 });
+
+// 红线目录只需拉一次（静态目录，不随任务变化）
+let redlineLoaded = false;
+async function loadRedlineCatalog() {
+  if (redlineLoaded) return;
+  try {
+    redlineCatalog.value = await api.get("/tasks/redline-catalog");
+    redlineLoaded = true;
+  } catch (e) {
+    redlineCatalog.value = [];
+  }
+}
 watch(modelMode, (mode) => {
   if (mode === "single" && props.open) loadModels();
   if (mode === "pool" && !taskProviders.value.length) {
@@ -272,6 +288,7 @@ async function save() {
     manual_targets: form.manual_targets.split("\n").map((s) => s.trim()).filter(Boolean),
     auth_bindings: showAuthBindings.value ? exportAuthBindings() : [],
     src_rules: form.src_rules,
+    redline_checks: form.redline_checks || [],
     concurrency: parseInt(form.concurrency) || 3,
     deepen_cap: Math.max(0, Math.min(parseInt(form.deepen_cap) || 0, 10)),
     auto_killsweep: form.auto_killsweep !== false,
@@ -454,6 +471,20 @@ async function save() {
       <p class="field-hint">
         已内置{{ form.src_type === 'enterprise' ? '企业SRC' : 'EduSRC' }}标准。这里只追加本任务额外要求；留空则只用内置标准。与内置冲突时按更严的执行，不能放宽红线。
       </p>
+
+      <div class="redline-block">
+        <div class="redline-head">
+          红线勾选（可选，勾上后本任务严格执行）
+          <span class="redline-note">系统内置红线（禁全量脱库/禁扫描器心智）始终生效，不在此列</span>
+        </div>
+        <label v-for="r in redlineCatalog" :key="r.id" class="redline-item">
+          <input type="checkbox" :value="r.id" v-model="form.redline_checks" />
+          <span class="redline-text">
+            <b>{{ r.title }}</b>
+            <em>{{ r.desc }}</em>
+          </span>
+        </label>
+      </div>
 
       <footer>
         <button type="button" @click="emit('close')">取消</button>

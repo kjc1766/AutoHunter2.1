@@ -50,6 +50,9 @@ class Task(Base):
     src_type: Mapped[str] = mapped_column(String(20), default="edusrc")
     vuln_types: Mapped[list] = mapped_column(JSON, default=list)        # 选定漏洞类型
     src_rules: Mapped[str] = mapped_column(Text, default="")            # 任务附加 SRC 规则（叠加内置标准，不替换）
+    # 用户勾选的可选红线（结构化 id 列表）。每条红线会拼进 worker 系统提示词。
+    # 内置自身红线（禁止全量脱库/禁止扫描器心智等）不受开关影响，永远生效。
+    redline_checks: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
     target_source: Mapped[str] = mapped_column(String(20), default="fofa")  # fofa / manual / both / site
     fofa_query: Mapped[str] = mapped_column(Text, default="")
     manual_targets: Mapped[list] = mapped_column(JSON, default=list)

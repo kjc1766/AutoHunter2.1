@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import re
 import selectors
 import signal
 import subprocess
@@ -46,11 +47,38 @@ _WORKDIR_MAX_BYTES = int(os.environ.get("WORKER_WORKDIR_MAX_BYTES", str(50 * 102
 _WORKDIR_RESCAN_EVERY = 32
 _SHELL_CAPTURE_MAX_BYTES = int(os.environ.get("WORKER_SHELL_CAPTURE_MAX_BYTES", str(512 * 1024)))
 _HTTP_MAX_BYTES = int(os.environ.get("WORKER_HTTP_MAX_BYTES", str(1024 * 1024)))
+# 单次取数行数上限（最小充分取证）。证明"能拿到"不需要"全拿走"：
+# 超过这个行数的响应会被截断并提示改用 LIMIT 样本 + COUNT(*)。
+# 这是提示词「禁止全量脱库」之外的代码层兜底，防止模型无视文本约束真的拖库。
+MAX_DUMP_ROWS = int(os.environ.get("MAX_DUMP_ROWS", "20"))
 _REFLECT_GUIDANCE = (
     "本次未执行。请先反思：会不会删库、清缓存、覆盖已有文件导致改不回？"
     "能改成 SRC_TEST_ 哨兵、ROLLBACK、或只证明接口存在就不要做破坏。"
     "若确认是无害验证，再次调用并设 confirm_destructive=true，confirm_reason 写明原因。"
 )
+
+# 全量脱库特征：命中任一即视为"想把整表拿走"，需要提示降级为样本+COUNT。
+# 只做提示与截断，不阻断请求本身（阻断会让真实漏洞验不了）。
+_DUMP_ALL_RE = re.compile(
+    r"--dump-all|--dump\b|--sql-shell|--os-shell|"
+    r"select\s+\*\s+from\s+[`\"\w.]+\s*(?:;|$)|"          # SELECT * FROM t 无 WHERE/LIMIT
+    r"select\s+.*\s+from\s+[\w`\".]+\s+where\s+1\s*=\s*1",
+    re.IGNORECASE,
+)
+
+
+def looks_like_full_dump(command: str) -> bool:
+    """判断这条命令是不是在做全量脱库（而非取样本）。"""
+    return bool(_DUMP_ALL_RE.search(command or ""))
+
+
+def _dump_guard_note(rows_seen: int) -> str:
+    return (
+        f"\n[红线·禁止全量脱库] 本次响应约 {rows_seen} 行，超过单次取数上限 {MAX_DUMP_ROWS} 行。"
+        "证明危害不需要全量：请改用 `LIMIT 3` 取 3-5 条样本，配一条 `SELECT COUNT(*)` 说明规模；"
+        "敏感表禁止 --dump/--dump-all、禁止 SELECT * 无 LIMIT、盲注每个字段最多取前 8 位。"
+        "凭据类（AK/SK、kubeconfig、DB 密码）直接提交报告，不要自行深入验证。\n"
+    )
 
 
 def _confirm_pause(exc: NeedsConfirm) -> dict[str, Any]:

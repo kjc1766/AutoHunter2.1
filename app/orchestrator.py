@@ -2336,6 +2336,7 @@ class TaskRunner:
         duplicate_history: list[dict] = []
         src_type = "edusrc"
         src_rules = ""
+        redline_checks: list = []
         fofa_key = ""
         fofa_base_url = ""
         engine_name = "fofa"
@@ -2345,6 +2346,7 @@ class TaskRunner:
             if task_obj:
                 src_type = task_obj.src_type or "edusrc"
                 src_rules = task_obj.src_rules or ""
+                redline_checks = list(task_obj.redline_checks or [])
                 engine_cfg = resolve_engine_config(task_obj)
                 engine_name = engine_cfg["engine"]
                 fofa_key = engine_cfg["key"]
@@ -2442,6 +2444,7 @@ class TaskRunner:
                             engine=engine_name,
                             prompt_version=prompt_version,
                             src_rules=src_rules,
+                            redline_checks=redline_checks,
                             pop_directive=lambda: self._pop_directive(target_id),
                             task_id=task_id)
             worker_holder["worker"] = worker
