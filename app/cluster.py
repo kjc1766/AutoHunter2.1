@@ -28,32 +28,56 @@ TITLE_SIM_THRESHOLD = 0.42
 
 # (大类, 关键词 tuple)。关键词用小写，匹配标题 + vuln_type 拼接后的文本。
 _SEMANTIC_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # 顺序即优先级：先命中先返回。高特异性的类型必须排在前面，
+    # 否则「wxConfig 泄露 corpsecret」会被 sign_bypass 的 "secret" 抢先吞掉
+    # （实测把企业微信凭据泄露误判成签名绕过，连带报修审批越权也进了这个桶）。
+    ("sqli", (
+        "sql注入", "sql 注入", "sqlinjection", "sql injection", "sql_injection",
+        "报错注入", "盲注", "union 注入", "union注入", "error-based", "orderby 注入",
+        "order by 注入", "注入点",
+    )),
+    ("rce", (
+        "rce", "命令执行", "code execution", "反序列化", "deserialization",
+        "webshell", "任意代码", "远程代码", "jsp webshell", "getshell",
+    )),
     ("weak_cred", (
         "弱口令", "弱密码", "默认口令", "默认密码", "默认账号", "default credential",
         "weak password", "default password", "admin/admin", "admin123", "manager11",
-        "硬编码密码", "hardcoded password", "硬编码账号",
+        "硬编码密码", "hardcoded password", "硬编码账号", "口令爆破", "密码爆破",
     )),
-    ("sign_bypass", (
-        "签名", "sign", "jwt", "密钥", "secret", "hmac", "验签", "盐",
+    ("upload", (
+        "任意文件上传", "文件上传", "upload 接口", "arbitrary file upload", "上传漏洞",
+        "任意文件写入", "importseal", "importsignature", "传jsp", "传 shell",
     )),
-    ("sqli", ("sql注入", "sql 注入", "sqlinjection", "sql injection", "报错注入", "盲注",
-              "union 注入", "error-based")),
-    ("rce", ("rce", "命令执行", "code execution", "反序列化", "deserialization",
-             "webshell", "任意代码")),
-    ("traversal", ("路径穿越", "traversal", "任意文件读取", "任意文件下载", "lfi",
-                   "目录穿越", "arbitrary file read")),
-    ("upload", ("任意文件上传", "文件上传", "upload", "arbitrary file upload")),
+    ("traversal", (
+        "路径穿越", "traversal", "任意文件读取", "任意文件下载", "lfi",
+        "目录穿越", "arbitrary file read", "路径遍历",
+    )),
     ("ssrf", ("ssrf", "服务端请求伪造", "server-side request")),
+    # 签名绕过放在 ssrf 之后、info_leak 之前：HS256/JWT 伪造这类标题常同时提到
+    # SSRF 或密钥泄露，靠前会被抢走。关键词只保留签名强相关词。
+    ("sign_bypass", (
+        "签名绕过", "伪造sign", "伪造 sign", "签名校验", "签名盐", "签名密钥",
+        "signbypass", "signature bypass", "验签绕过", "jwt 伪造", "jwt伪造",
+        "hs256", "硬编码密钥", "硬编码签名", "伪造令牌", "令牌伪造",
+    )),
     ("xss", ("xss", "跨站脚本", "cross-site scripting")),
     ("csrf", ("csrf", "跨站请求伪造")),
+    ("idor", (
+        "越权", "idor", "bfla", "bola", "功能级授权", "横向越权", "纵向越权",
+        "水平越权", "垂直越权", "未授权写", "越权写", "越权读", "missing function",
+        "mass assignment", "批量赋值",
+    )),
     ("auth_bypass", (
         "绕过鉴权", "认证绕过", "authentication bypass", "鉴权绕", "未授权访问",
         "unauthorized", "未鉴权", "免登录", "零cookie", "无cookie", "未登录",
-        "会话签发", "伪造任意用户", "登录态伪造",
+        "会话签发", "伪造任意用户", "登录态伪造", "免鉴权", "零凭据", "无认证",
+        "未认证", "完全未鉴权", "referer 绕过", "白名单绕过",
     )),
-    ("idor", ("越权", "idor", "bfla", "bola", "功能级授权", "横向越权", "纵向越权")),
-    ("info_leak", ("信息泄露", "敏感信息", "exposure", "disclosure", "泄露",
-                   "数据泄露", "dump")),
+    ("info_leak", (
+        "信息泄露", "敏感信息", "exposure", "disclosure", "数据泄露", "dump",
+        "corpsecret", "凭据泄露", "密码哈希", "证件号", "通讯录", "敏感数据",
+    )),
 )
 
 _OTHER = "other"

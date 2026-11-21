@@ -1604,21 +1604,23 @@ class Worker:
     def _vuln_class_of(self, finding: Finding) -> str:
         """取该漏洞的语义大类，用于同类产量熔断。
 
-        必须与 dedup 用同一套归一（normalize_vuln_type），不能用 semantic_class：
-        后者按关键词匹配，'sqli' 这种简称会漏成 'other'，回退后与 'SQL注入'
-        折出的 'sqli' 分属两桶，熔断就会失效（实测 'SQL注入'→sqli 但
-        'sqli'→sql_injection）。统一走 dedup 保证同桶。
+        必须走 semantic_class（关键词子串匹配），不能用 normalize_vuln_type：
+        后者是精确匹配，LLM 只要多写一句话就变新桶。实测 155 条真实数据里
+        「越权访问/功能级授权失效 (BFLA)」这类长描述各自成桶（10+ 个），
+        「弱口令导致后台管理员接管 + 客户PII泄露」也自成一桶，熔断完全不生效。
+        关键词匹配能把它们都收进 idor / weak_cred / auth_bypass。
+
+        title 与 vuln_type 一起喂进去，命中率更高（标题常带"SQL注入""弱口令"等）。
         """
-        vt = dedup.normalize_vuln_type(finding.vuln_type or "")
-        if vt:
-            return vt
-        # vuln_type 为空时退回标题里的语义大类
         from app.cluster import semantic_class
         try:
-            sem = semantic_class(finding.title or "")
+            sem = semantic_class(finding.title or "", finding.vuln_type or "")
         except Exception:
             sem = ""
-        return sem if sem and sem != "other" else "other"
+        if sem and sem != "other":
+            return sem
+        # 语义没命中时再退回精确归一，至少同写法还能相等比较
+        return dedup.normalize_vuln_type(finding.vuln_type or "") or "other"
 
     def _report_deepen_suggestion(self, finding: Finding, cls: str, hits: int) -> None:
         """把「该类已够量、建议人工深挖」标记到 finding 的 evidence 上，供 UI 渲染深挖按钮。"""
