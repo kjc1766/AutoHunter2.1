@@ -383,7 +383,6 @@ async def _compute_stats(session: AsyncSession, task_id: str) -> TaskStats:
             Finding.task_id == task_id,
             Review.verdict.in_(["ignored", "deepen"]),
             Review.user_status == "pending",
-            Finding.status != "superseded",
         )
     )).scalar() or 0
     stats.archived_write = (await session.execute(
@@ -393,7 +392,6 @@ async def _compute_stats(session: AsyncSession, task_id: str) -> TaskStats:
             Finding.task_id == task_id,
             Review.verdict.in_(["ignored", "deepen"]),
             Review.user_status == "pending",
-            Finding.status != "superseded",
             or_(
                 Finding.title.ilike("%删除%"),
                 Finding.title.ilike("%修改%"),
