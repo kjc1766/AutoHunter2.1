@@ -222,6 +222,20 @@ _WORKER_DEEPEN_ACTION_MARKERS = (
     "调用", "调 ", "访问", "验证", "证明", "上传", "执行", "解析", "读取", "导出",
     "枚举", "伪造", "重放", "替换", "越权读取", "越权修改",
 )
+# 「等条件」型 lead：下一步依赖外部前提（外部凭据/社工/别人先突破），本轮拿不到就
+# 永远执行不了。这类回炉纯属空转——实测 jjhgl.yinu.edu.cn 连续 10 个目标，
+# lead 全是「若未来取得 backend 账号口令」这类，却因含 cookie/token 关键词被
+# actionable 词表放行，反复回炉。
+# 判定顺序上必须**先于** actionable 检查，否则关键词命中就放行。
+_WORKER_DEEPEN_WAITING_MARKERS = (
+    "若未来取得", "若后续获取", "如后续获取", "若后续获得", "如后续获得",
+    "需外部提供", "需要外部提供", "唯一解锁前提", "唯一可接力",
+    "需先取得有效", "需先拿到有效", "拿到任一有效", "取得任一有效",
+    "若能取得任一", "如能取得任一", "若能拿到任一", "如能拿到任一",
+    "需合法凭据", "需外部凭据", "依赖外部", "待外部",
+    "若将来", "如将来", "未来若", "待获取", "尚未取得", "还未取得",
+    "由人工", "交人工", "需人工", "等人工",
+)
 
 
 def _now() -> datetime:
@@ -333,6 +347,11 @@ def _is_actionable_worker_deepen_lead(lead: str) -> bool:
         return False
     compact = text.lower()
     if any(marker.lower() in compact for marker in _WORKER_DEEPEN_NEGATIVE_MARKERS):
+        return False
+    # 「等条件」型 lead 优先拦：这类依赖外部凭据/社工等本轮无法获得的前提，
+    # 关键词（cookie/token/session）会被下面的 actionable 词表放行，导致同一目标
+    # 反复回炉空转。必须在 actionable 判定之前返回 False。
+    if any(marker.lower() in compact for marker in _WORKER_DEEPEN_WAITING_MARKERS):
         return False
     has_actionable_marker = any(marker.lower() in compact for marker in _WORKER_DEEPEN_ACTIONABLE_MARKERS)
     has_concrete_endpoint = "/" in text or "?" in text or "=" in text
