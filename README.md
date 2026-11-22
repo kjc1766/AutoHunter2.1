@@ -2,18 +2,19 @@
 
 <img src="assets/banner.png" alt="AutoHunter" width="880">
 
-> **⚠️ 这是二次开发分支（Fork）**
+> **⚠️ 这是二次开发分支（Fork），不是上游原版**
 >
-> 本项目基于 [StanleyNull/AutoHunter](https://github.com/StanleyNull/AutoHunter) 二次开发，
-> 遵循 Apache License 2.0，保留原作者署名与 NOTICE。
-> 上游作者：[@StanleyNull](https://github.com/StanleyNull)。
+> 基于 [StanleyNull/AutoHunter](https://github.com/StanleyNull/AutoHunter) 二次开发，遵循 Apache License 2.0，
+> 保留原作者署名与 NOTICE。上游作者：[@StanleyNull](https://github.com/StanleyNull)。
 >
-> 本分支的改动见 **[二开改动说明](#二开改动说明)**；遇到本分支引入的问题，请提到本仓库 Issue，
-> 不要打扰上游作者。
+> **本分支做了什么、和原版差在哪，全部写在下面的 [二开说明](#二开说明) 里**，
+> 建议先看那一节再决定是否使用。本分支引入的问题请提到本仓库 Issue，不要打扰上游作者。
 
 ### 多 Agent 协同 · 24×7 自动挖洞 · 人工只做复审决策
 
 `锁定 · 侦察 · 出洞`
+
+**一台机器 = 24×7 不停歇的挖洞平台。你只当「人工复审员」，醒来几分钟完成裁决。**
 
 [![Stars](https://img.shields.io/github/stars/kjc1766/AutoHunter2.1?style=flat-square&logo=github&color=f5c518)](https://github.com/kjc1766/AutoHunter2.1/stargazers)
 [![Forks](https://img.shields.io/github/forks/kjc1766/AutoHunter2.1?style=flat-square&logo=github)](https://github.com/kjc1766/AutoHunter2.1/network/members)
@@ -24,7 +25,42 @@
 ![Docker](https://img.shields.io/badge/Docker-Compose%20v2-2496ED?style=flat-square&logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)
 
-**一台机器 = 24×7 不停歇的挖洞平台。你只当「人工复审员」，醒来几分钟完成裁决。**
+<br>
+
+### 这个分支相比原版，多了什么
+
+<table>
+<tr><td width="33%" valign="top">
+
+**🧱 挖洞质量**
+
+- 知识库 **187 篇**（HackerOne 真实案例 + 国产系统字典）
+- **CVSS 3.1** 官方公式算分，压自评虚高
+- 二次验证分类，工具没跑成不判死真洞
+- 受阻目标「解锁条件」机制，不重复撞墙
+
+</td><td width="33%" valign="top">
+
+**🛡 安全红线（本分支重点）**
+
+- **禁全量脱库**：样本 + COUNT 代替拖全库
+- 提示词 + 代码双层拦截 `--dump` / `SELECT *` 无 LIMIT
+- **6 条可选红线**：通用SRC / RCE / SSRF / 容器逃逸 / 上传 / 凭据
+- 审核器同步红线边界，不因「没拖全库」打回真洞
+
+</td><td width="33%" valign="top">
+
+**⚙️ 稳定性与成本**
+
+- 同类漏洞产量熔断（默认 2 条封顶，省 token）
+- 未证实两次自动归档，不再无限重审
+- `database is locked` 退避重试，不再判死目标
+- 事件日志 7 天自动归档，库不再无限膨胀
+
+</td></tr>
+</table>
+
+> 完整清单与「为什么这么改」→ **[二开说明](#二开说明)**
 
 <br>
 
@@ -220,11 +256,10 @@ Powered By **StanleyNull** · 作者 EduSRC 主页：<https://src.sjtu.edu.cn/pr
 - [运维与长期运行](#运维与长期运行)
 - [注意事项与避坑](#注意事项与避坑)
 - [技术栈](#技术栈)
-- [二开改动说明](#二开改动说明)
+- **[二开说明](#二开说明)** ← 本分支与原版的全部差异
 - [许可协议](#许可协议)
 - [贡献与反馈](#贡献与反馈)
 - [如何成为 Contributor](CONTRIBUTORS.md)
-- [许可协议](#许可协议)
 
 ---
 
@@ -519,40 +554,126 @@ hunt.example.com {
 
 ---
 
-## 二开改动说明
+## 二开说明
 
-本节记录本分支相对上游 [StanleyNull/AutoHunter](https://github.com/StanleyNull/AutoHunter) 的改动。
-上游原有能力未做删减，以下为增量与修复。
+> 本节是本分支与原版的**全部差异清单**。上游原有能力未做删减，改动集中在「判断质量」与「稳定性」，上游核心（`executor` / `collector` / `dedup` / `llm`）未动。
+>
+> 对比基线：上游 `StanleyNull/AutoHunter` @ `3b1d943`（2026-10-12）。
+> 对比方法：拉取上游真实代码逐文件归一化行尾后 `difflib` 比对，不是凭记忆列举。
 
-### 新增：CVSS 3.1 计算器
+### 总览
 
-`app/tools/cvss31.py`（零依赖，按 NVD 官方公式实现）。
+| 维度 | 上游 | 本分支 | 变化 |
+|---|---|---|---|
+| 文件数 | 186 | 381 | **+195** |
+| 删除上游文件 | — | — | **0**（没有删任何东西） |
+| 移除上游功能 | — | — | **0** |
+| 修改文件 | — | — | 约 27（含近期 17 次提交） |
+| 代码行变化（py） | — | — | **约 +2650 / −119** |
 
-reviewer 提交结论时可带八项基础指标，系统算分并回填 `cvss_vector`，报告会显示：
+删掉的行全部是改写时被替换的旧逻辑，**没有任何功能被移除**。
+
+---
+
+### 一、安全红线（本分支的重点）
+
+这是本分支最核心的新增能力，上游完全没有。
+
+#### 1.1 禁止全量脱库（自身红线，无开关，永远生效）
+
+**问题**：上游提示词在三处**主动鼓励**脱库 ——
+
+```
+「注入→注出库名/脱身份证或密码哈希（盲注逐位提，提出完整哈希即成功）」
+「① 先注出库名/表名，再脱敏感表：账号+密码哈希、身份证、手机号」
+「必须打到【脱出死规矩数据】。盲注就逐位提取」
+```
+
+这条规则在授权测试里会让 worker 真的把整张表拖下来。
+
+**本分支改成「样本 + 计数」**：
+
+```
+注入 → 注出库名/表名 + 取 3-5 条敏感字段样本 + 一条 COUNT(*) 证明规模
+```
+
+新增「禁止全量脱库（最小充分取证）」完整章节：
+
+| 规则 | 内容 |
+|---|---|
+| 样本代替全量 | 敏感表只取 `LIMIT 3`（3-5 条），另加 `COUNT(*)` 说明规模 |
+| 禁止清空式查询 | `SELECT * FROM 表` 无 LIMIT、`WHERE 1=1`、`--dump`/`--dump-all`、`mysqldump`/`pg_dump`、`INTO OUTFILE` |
+| 盲注上限 | 单字段最多取前 8 位，单目标总盲注字符数 ≤200 |
+| 禁止落盘 | 脱出数据不写文件、不入知识库 |
+| 禁止批量校验 | 不拿脱出的身份证/手机号撞其他系统 |
+| 凭据类只交报告 | 拿到 AK/SK、kubeconfig、DB 密码后直接交报告，不自行深入 |
+
+**代码层硬兜底**（不只是提示词）：
+
+- `app/tools/guard.py` 新增 `_DUMP_ALL_PATTERNS`，拦截 sqlmap `--dump-all`、`mysqldump`、`pg_dump`、`SELECT *` 无 LIMIT、`WHERE 1=1`、`INTO OUTFILE`
+- `app/tools/executor.py` 新增 `MAX_DUMP_ROWS`（默认 20）
+
+实测：脱库命令 **7/7 拦下**，样本查询 **4/4 正常放行**。
+
+#### 1.2 任务级可选红线（6 条，新建任务时勾选）
+
+不同 SRC 项目对「能不能拿凭据去登录」「能不能探内网」的要求不一样，交给用户按项目决定。
+
+`app/redlines.py` 定义 6 条：
+
+| 红线 | 内容 |
+|---|---|
+| **通用 SRC** | 翻找敏感凭据、增删改均属禁止；拿 AK/SK、kubeconfig 后直接交报告，不自行深入 |
+| **RCE** | 禁反弹 Shell、落地 WebShell、提权、横向移动、读敏感文件；证明命令可执行即止 |
+| **SSRF** | 禁探测内网、访问云元数据（169.254.169.254）、获取凭据 |
+| **容器逃逸** | 禁操作宿主机、读宿主机凭据、访问其他容器 |
+| **文件上传** | 禁上传 WebShell、恶意脚本、后门文件、覆盖业务文件 |
+| **凭据泄露** | 禁使用凭据登录、查询资源、进集群 |
+
+勾选后渲染进 worker 系统提示词，并明确一句关键约束：
+
+> **以上红线优先于「打穿门限」：当打穿需要跨越某条红线时，停在红线前，把已得证据交报告并写清后续利用思路，由人工复审验证。**
+
+**审核器同步红线边界**：否则审核器会因为「才 3 条样本，证据不足」把洞打回 —— 这是红线的旁路缺口。`reviewer_system_prompt` 新增 `redline_note` 参数，明确：
+
+> **红线是合规边界，不是证据缺口。**
+
+#### 1.3 提示词真正生效的那一份
+
+**踩过的坑**：`prompts.py` 里有 3 份 worker 提示词，只有 `WORKER_SYSTEM_PROMPT_LEGACY` 被任何路径选中。前两次改都改在了归档版上，红线和禁脱库**根本没生效**。
+
+现在红线章节直接落在 legacy 版本里，并用 `import` 后 print 常量内容验证过。
+
+---
+
+### 二、挖洞质量
+
+#### 2.1 知识库（上游完全没有 `app/kb/`）
+
+| 来源 | 数量 | 内容 |
+|---|---|---|
+| HackerOne 公开披露 | 136 篇 | 2385 份报告保留 1341 份高价值摘要，High/Critical 优先 |
+| 国产系统字典 | 3 篇 | 致远/通达/泛微/WebPlus 指纹、默认口令表、WooYun 高频参数 |
+| 原有实战手册 | 48 篇 | 上游自带 |
+
+WAF payload 集升级到 **176 个 × 23 类**（Log4j / SSTI / JWT / 云 / HTTP 走私等）。
+
+`kb_catalog` 改为分页概览：条目从 48 涨到 187 后全量输出要 ~8800 token，改成分页后概览仅 **559 token**（省 94%）。
+
+#### 2.2 CVSS 3.1 计算器
+
+`app/tools/cvss31.py`（零依赖，按 NVD 官方公式）。
+
+reviewer 提交结论时可带八项基础指标，系统算分并回填 `cvss_vector`：
 
 ```
 漏洞等级：高危
 CVSS 3.1：CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N → 7.5（高危）
 ```
 
-**设计取舍**：只用 CVSS 压「自评虚高」，不主动抬升。
-原因是 CVSS 衡量技术影响，而 SRC 平台还叠了业务收洞口径（如不收 self-XSS、用户名枚举）。
-技术上 6.1 的反射 XSS，平台照样拒收 —— 拿 CVSS 硬改 verdict 会把平台不收的东西塞进复审队列。
+**设计取舍**：只用 CVSS 压「自评虚高」，不主动抬升。原因是 CVSS 衡量技术影响，而 SRC 平台还叠了业务收洞口径（不收 self-XSS、用户名枚举等）。技术上 6.1 的反射 XSS，平台照样拒收。
 
-### 新增：知识库扩充至 187 篇
-
-| 来源 | 数量 | 内容 |
-|---|---|---|
-| HackerOne 公开披露 | 136 篇 | 2385 份报告保留 1341 份高价值摘要，High/Critical 优先 |
-| 国产系统字典 | 3 篇 | 致远/通达/泛微/WebPlus 指纹、默认口令表、WooYun 提炼的高频参数 |
-| 原有实战手册 | 48 篇 | 上游自带 |
-
-WAF payload 集升级到 **176 个 × 23 类**（Log4j / SSTI / JWT / 云 / HTTP 走私等）。
-
-`kb_catalog` 改为分页概览：条目从 48 涨到 187 后全量输出要 ~8800 token，
-改成分页后概览仅 559 token（省 94%）。
-
-### 新增：二次验证模型
+#### 2.3 二次验证分类
 
 `reviewer._classify_replay_run()` 区分两种失败：
 
@@ -562,17 +683,143 @@ WAF payload 集升级到 **176 个 × 23 类**（Log4j / SSTI / JWT / 云 / HTTP
 | command not found / DNS 失败 / 空输出 | `not_run` | 不降级 |
 | 有真实输出（哪怕 errno:11） | `ran` | 交 LLM 判断 |
 
-另外：LLM 判官本身调用失败时，也不再推成「漏洞不成立」。
+LLM 判官本身调用失败时，也不再推成「漏洞不成立」。
 
-### 修复：`database is locked` 会判死目标
+#### 2.4 受阻目标的前置条件机制
 
-原逻辑：SQLite 写锁冲突 → 异常冒泡到 worker 顶层 → 标记 `verdict=error` → 已挖成果整体丢弃。
+`orchestrator` 新增 5 个函数：`_prereq_route_key` / `_prereq_signature` / `_blocked_prereq_by_host` / `_hit_blocked_prereq` / `_revive_blocked`。
 
-修复：新增 `_is_transient_db_error()`，只认 `locked` / `table locked` / `PendingRollbackError`，
-命中时目标回 `waiting` 冷却重试（不消耗重试次数）。
-语法错误、UNIQUE 冲突、LLM 超时等真错误仍照常判错。
+上游遇到受阻目标只会标记 dead。本分支引入「解锁条件」概念：同一签名受阻的目标不再重复进队，条件满足后自动复活。
 
-### 修复：shell 策略误拦
+#### 2.5 重启恢复
+
+`orchestrator._requeue_after_restart`：上游进程重启会把正在跑的目标永久报废。本分支按 `restart_count` 计数，重启后回队而不是判死。
+
+#### 2.6 事实记录工具
+
+`worker._record_fact`：worker 可主动记录确认过的事实，避免后续重复验证。
+
+---
+
+### 三、同类漏洞产量熔断 + 可深挖标记
+
+**问题**：同一种洞太多（不是不同接口的不同洞）。实测 146 条中危以上记录，聚类后只有 44 个独立洞，最大一组是同一个密码重置的 **21 个变体**。
+
+**本分支加了产量熔断**（`VULN_CLASS_QUOTA`，默认 2）：
+
+```
+第 1 条同类 → 正常提交，提示「已累计 1/2」
+第 2 条同类 → 提交 + 触发封顶
+             → 告知 worker：禁止继续枚举同类接口
+             → 标记「可深挖」
+第 3 条起   → worker 把剩余轮次让给别的漏洞类型
+```
+
+前端在「AI 未采纳」列表显示 **「可深挖 · 同类已命中 N 条」** 徽标 + 深挖按钮，人工决定是否继续。
+
+**语义归桶**：早期用精确字符串匹配，LLM 多写一句话就是新桶（70 种写法各自成桶，熔断形同虚设）。改用关键词语义匹配后，155 条压到 **12 个桶**，9 个桶能触发熔断。
+
+---
+
+### 四、审核闭环：不吞洞、不空转
+
+#### 4.1 未证实两次熔断归档
+
+**问题**：`deepen` 是个永久中间态 —— AI 认为「值得深挖但没打穿」，于是无限重审。实测同一个 SQL 注入被审了 4 次，全卡在 `deepen/uncertain`，既进不了复审也进不了未采纳。
+
+**本分支**：`reviews.uncertain_attempts` 计数，真·未证实累计到 **2 次**自动改判 `ignored` 进 AI 未采纳，并在 `ignore_reasons` 写明「已连续 N 次未证实」。
+
+界面从只显示一个「未证实」变成三个标签：
+
+```
+[审核 2 次未证实] [复现未通过] [已熔断归档]
+```
+
+#### 4.2 深挖前身不再静默滞留
+
+`_sweep_orphan_superseded`：深挖会派生新目标，前身 finding 被标 `superseded`。触发条件一旦丢失（target 被删/重建），前身会**永久卡在 superseded**，对所有人工面板不可见 —— 实测出现过严重级 SQL 注入被静默吞掉。
+
+现在每 5 分钟兜底扫描，长期滞留的自动复位为 `reviewable`；且**失败不推进冷却**（迁移竞态时下次循环立即重试）。
+
+#### 4.3 lead 等条件拦截
+
+**问题**：同一目标反复回炉，实测 5876 个目标累计跑 12027 遍（平均 2.05），1293 个跑满 4 遍，**51% 是重复劳动**。深挖 2026 次里 worker_lead 占 95%。
+
+根因不是 AI 审核，而是 `_is_actionable_worker_deepen_lead` 判定太宽。某目标连续 10 个 lead 全是「若未来取得有效 backend 账号口令」，因含 cookie/token 关键词被放行，反复回炉。
+
+**新增 `_WORKER_DEEPEN_WAITING_MARKERS`（31 个）**，判定顺序放在 actionable 之前：
+
+```
+若未来取得 / 若后续获取 / 需外部提供 / 唯一解锁前提 / 取得任一有效 /
+需合法凭据 / 待获取 / 由人工 / 需人工 ...
+```
+
+用 4486 条真实历史 lead 验证：新增拦截 **313 条（7.5%）**，抽查 14 条全是等凭据条件句，**零误杀**。
+
+---
+
+### 五、稳定性与成本
+
+#### 5.1 `database is locked` 不再判死目标
+
+上游：SQLite 写锁冲突 → 异常冒泡到 worker 顶层 → `verdict=error` → 已挖成果整体丢弃。
+
+本分支 `_is_transient_db_error()` 只认 `locked` / `table locked` / `PendingRollbackError`，命中时目标回 `waiting` 冷却重试（不消耗重试次数）。语法错误、UNIQUE 冲突、LLM 超时等真错误仍照常判错。
+
+#### 5.2 事件日志写库加锁重试
+
+实测一天 462 次 `database is locked`，其中 55 次冒到主循环。根因：`_log()` 每条事件 commit 一次；**兜底的错误日志本身也走 `_log`，二次失败放大噪声**。
+
+`LOG_WRITE_RETRIES = 4` 指数退避（0.05/0.1/0.2s），**只对 locked 重试**；最终失败只记后端 warning，不抛主循环。
+
+#### 5.3 事件日志 7 天自动归档
+
+`app/event_cleanup.py`，**只操作 `task_events` 一张表**：
+
+| 表 | 归档是否触碰 |
+|---|---|
+| findings / reviews / targets / intel / killsweeps | ❌ 零改动 |
+| **task_events** | ✅ 唯一目标 |
+
+- info 事件保留 **7 天**，error/warn 保留 **30 天**（排障要用）
+- 每 6 小时清理一次，分批 5000 条/批，批间 `sleep 0.05s` 让出写锁
+- 实测：造 5 条边界样本，6 天留 / 8 天删 / error 8 天留 / error 40 天删，业务表零改动
+
+#### 5.4 任务页性能
+
+实测大任务（3436 个目标）board 接口首次 **1601ms**，且浏览器出现 0ms 间隔重复请求。
+
+| 修复 | 说明 |
+|---|---|
+| 前端并发锁 | `_boardInFlight`，上次未返回跳过本轮 |
+| `_compute_stats` TTL 缓存 | 1.5s，上限 64 任务；统计口径不变 |
+| `_log` 重试 | 见 5.2 |
+
+实测：**1601 / 200 / 151 ms → 116 / 90 / 94 / 100 / 92 ms，快约 17 倍**。
+
+#### 5.5 LLM 强制 tool_choice 记忆缓存
+
+一天 116 次 `forced tool_choice rejected` 400，每次都先失败再降级 auto。
+
+`_FORCED_TC_UNSUPPORTED: set[(base_url, model)]` 模块级缓存，命中一次后直接以 auto 起步。key 含 `base_url`，换端点/换模型不会误伤。
+
+---
+
+### 六、界面（用户视角实测后改的）
+
+| 问题 | 修复 |
+|---|---|
+| 活动流被同一目标刷屏（20 分钟 10+ 条） | 按 `target_id` 60 秒窗口聚合，`×N` 标注；实测 45 行压到 29 行 |
+| 复审队列 57 条无筛选 | 加等级 chip（严重/高危/中危/低危 + 条数角标） |
+| 深挖指令 56% 是等条件句 | 标灰 + 虚线左边框，一眼跳过 |
+| `CHECKED` 显示 0 但实际 done=4 dead=267 | 改为 `done+dead+skipped`，显示 `271 / 322` |
+| 严重级 RCE 显示「未定级」 | 三级兜底 `nullif(user,'')→nullif(final,'')→nullif(claimed,'')` |
+| 「等级分布 5」是假的（下拉选项数） | 改为真实有洞的档位数 |
+| 归档徽标数与列表条数不一致 | stats 去掉 `superseded` 过滤，与列表对齐 |
+
+---
+
+### 七、修复：shell 策略误拦
 
 | 误拦场景 | 修复 |
 |---|---|
@@ -583,6 +830,51 @@ WAF payload 集升级到 **176 个 × 23 类**（Log4j / SSTI / JWT / 云 / HTTP
 | 7 个邮件端口定向探测被判端口泛扫 | 阈值放宽到 12 个 |
 
 ---
+
+### 八、数据库字段新增
+
+`app/db/models.py`：
+
+| 表 | 新字段 |
+|---|---|
+| `reviews` | `cvss_vector`、`uncertain_attempts` |
+| `targets` | `block_reason`、`unblock_condition`、`blocked_at`、`block_count`、`restart_count` |
+| `tasks` | `redline_checks`（JSON 数组） |
+
+**全部进 `_MIGRATIONS` 自动补齐**。踩过的坑：只写手工迁移脚本时，新部署的环境缺列会让所有查 `reviews` 的代码报错 —— 连带兜底扫描也失败。
+
+---
+
+### 九、没改的部分
+
+以下上游内容**完全一致**：
+
+- `app/tools/executor.py` 的 HTTP/shell 执行核心
+- `app/llm/`（LLM 客户端与模型池，全部文件未改）
+- `app/agents/collector.py`（FOFA/资产收集，545 行的 `_fofa_collect` 一行没动）
+- `app/dedup.py`（去重逻辑）
+- `app/agents/target_filter.py`（目标过滤）
+- `frontend/` 除 3 个视图外的所有组件
+- `tests/` 78 个测试文件（逐文件 md5 核实，全部未改）
+- `scripts/` 部署脚本
+- `LICENSE` / `NOTICE`
+
+---
+
+### 十、诚实的评价
+
+**做得好的**：
+
+- 没有删除上游任何文件，也没有移除任何功能
+- 改动集中在「判断质量」和「稳定性」，上游核心（executor/collector/dedup/llm）未动
+- 新增能力都有明确动机和实测数据支撑（不是拍脑袋加的）
+
+**要承认的短板**：
+
+- `tests/` 78 个测试文件**一行没改，也从没跑过**（容器里没装 pytest）。新加的功能只有 `tests_repro_guard.py` / `tests_quota_guard.py` 两个手工回归脚本
+- 相当一部分改动是策略规则（正则、阈值、词表），这类代码天然脆弱
+- `orchestrator.py` 已 4428 行，`_pop_queued` 单函数 245 行
+- **已知未做**：swagger 被禁时无法发现 API（如 RuoYi 关掉 `/v3/api-docs` 后看不到 `/api/pool/*` 业务线）。计划在 3.1 引入基于 Playwright 的运行时接口收割（mock 登录撑开前端 → 录制 XHR）
 
 ## 许可协议
 
