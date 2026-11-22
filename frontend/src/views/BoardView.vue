@@ -14,6 +14,35 @@ const task = ref(null);
 const tab = ref("board");          // board | review | submit | killsweep | rejected | archived
 const boardPanel = ref("workers"); // workers | stream（手机端看板切换）
 const events = ref([]);
+// 活动流按「目标」聚合：同一目标在 60 秒内的事件合成一行，用 ×N 标注次数。
+// 实测同一目标 20 分钟内出现 10+ 条（受阻挂起→回队→深挖→no_vuln 循环），
+// 而且这类事件 kind 各不相同（target_blocked / worker_auto_finish / target_retry），
+// 按 kind 合并根本不生效（实测 45 行只合了 2 组）。所以只按 target_id 聚合。
+// 展开行仍可点开看该目标完整轨迹，明细不丢。
+const eventsGrouped = computed(() => {
+  const out = [];
+  const open = new Map();  // target_id -> 当前聚合中的那一行
+  for (const ev of events.value) {
+    const tid = ev.target_id || "";
+    if (!tid) { out.push({ ...ev, _groupKeys: [ev], _count: 1 }); continue; }
+    const cur = open.get(tid);
+    const parsed = parseEventTs(ev._displayTs || ev.ts);
+    const curTs = cur ? parseEventTs(cur._displayTs || cur.ts) : null;
+    // 60 秒内同目标才合并，避免把相隔很久的同类事件误并成一行
+    const close = curTs && parsed && Math.abs(curTs.getTime() - parsed.getTime()) < 60000;
+    if (cur && close) {
+      cur._groupKeys.push(ev);
+      cur._count = (cur._count || 1) + 1;
+      cur._kinds = cur._kinds || [cur.kind];
+      if (!cur._kinds.includes(ev.kind)) cur._kinds.push(ev.kind);
+      continue;
+    }
+    const row = { ...ev, _groupKeys: [ev], _count: 1, _kinds: [ev.kind] };
+    open.set(tid, row);
+    out.push(row);
+  }
+  return out;
+});
 const liveWorkers = ref([]);       // 在跑 worker 活态
 const liveEscalations = ref([]);   // 扩大危害活态
 const siteCollab = ref(null);      // 单站协作态势（三阶段路线流水线，仅 site 任务）
@@ -1367,6 +1396,13 @@ const archivedCount = computed(() =>
 const archivedWriteCount = computed(() => Number(stats.value.archived_write || 0));
 const checkedHosts = computed(() => Number(stats.value.hosts_checked || 0));
 const totalHosts = computed(() => Number(stats.value.hosts_total || 0));
+// 已结束的目标数（done + dead + skipped）。
+// 用「目标」口径而不是「整站」口径：原 CHECKED 只统计"该 host 下所有 target 都结束"
+// 的站点数，单站协作下目标数上百，永远凑不齐，用户看到 CHECKED=0 却有 6 个洞，
+// 会怀疑数据坏了（实测就是这个情况：done=4 dead=267 但 CHECKED 显示 0）。
+const checkedTargets = computed(() =>
+  Number(stats.value.done ?? 0) + Number(stats.value.dead ?? 0) + Number(stats.value.skipped ?? 0)
+);
 const totalTargets = computed(() =>
   (stats.value.queued ?? 0) + (stats.value.scanning ?? 0) +
   (stats.value.done ?? 0) + (stats.value.dead ?? 0) + (stats.value.skipped ?? 0) +
@@ -1543,13 +1579,40 @@ function clearSearch() {
   searchDraft.value = "";
   searchText.value = "";
 }
+// 严重度快捷筛选（复审队列 57 条时用户要一条条翻，加这层省事）。
+// 空集 = 不筛；多选任一命中即显示。
+const sevFilter = ref(new Set());
+
+function matchSeverity(item) {
+  if (!sevFilter.value.size) return true;
+  const sev = effectiveSeverity(item);
+  return sevFilter.value.has(sev);
+}
+
+function toggleSevFilter(sev) {
+  const next = new Set(sevFilter.value);
+  if (next.has(sev)) next.delete(sev);
+  else next.add(sev);
+  sevFilter.value = next;
+}
+
 function matchSearch(item) {
+  if (!matchSeverity(item)) return false;
   const tokens = searchTokens.value;
   if (!tokens.length) return true;
   const text = stringifyForSearch(item);
   return tokens.every((t) => text.includes(t));
 }
 const filteredQueue = computed(() => queue.value.filter(matchSearch));
+// 各等级条数（用于筛选按钮上的角标，让用户一眼知道点下去能看到多少）
+const queueSevCount = computed(() => {
+  const m = {};
+  for (const f of queue.value) {
+    const s = effectiveSeverity(f);
+    m[s] = (m[s] || 0) + 1;
+  }
+  return m;
+});
 const filteredSubmit = computed(() => submitItems.value.filter(matchSearch));
 const filteredKillsweeps = computed(() => killsweepItems.value.filter(matchSearch));
 const filteredRejected = computed(() => rejectedItems.value.filter(matchSearch));
@@ -1570,7 +1633,19 @@ const rawCount = computed(() => {
   if (tab.value === "archived") return archivedItems.value.length;
   return 0;
 });
-function evClass(ev) { return `ev ${ev.level || "info"}`; }
+// 「等条件」型事件：下一步依赖外部前提（等凭据/等授权/已证伪），本轮无法执行。
+// 这类占深挖指令 56%（3198 条里 1786 条），全都被 lead 判定放行后反复出现在活动流里。
+// 标灰 + 虚线让用户一眼跳过，不用逐条读。
+const WAITING_PAT = /若未来|若后续|如后续|需外部提供|唯一解锁前提|唯一可接力|取得任一有效|拿到任一有效|需合法凭据|本资产到顶|已彻底证伪|不要再派回|不建议再派回/;
+function isWaitingLead(ev) {
+  const text = ev?._text || ev?.message || "";
+  if (!text) return false;
+  if (!/深挖|lead|接力|受阻/i.test(text) && !WAITING_PAT.test(text)) return false;
+  return WAITING_PAT.test(text);
+}
+function evClass(ev) {
+  return `ev ${ev.level || "info"}${isWaitingLead(ev) ? " ev-waiting" : ""}`;
+}
 function onDrawerUpdated() {
   refreshFromEvent({ kind: "review_updated" });
 }
@@ -1743,7 +1818,7 @@ function parseEventTs(ts) {
         <span class="metric-k">ACTIVE</span><b>{{ stats.scanning ?? 0 }}</b><em>扫描中</em>
       </div>
       <div class="metric-card">
-        <span class="metric-k">CHECKED</span><b>{{ checkedHosts }}</b><em>已检查</em>
+        <span class="metric-k">CHECKED</span><b>{{ checkedTargets }}</b><em>已检查/{{ totalTargets }}</em>
       </div>
       <div class="metric-card hot">
         <span class="metric-k">FINDINGS</span><b>{{ stats.findings_total ?? 0 }}</b><em>原始发现</em>
@@ -1881,8 +1956,8 @@ function parseEventTs(ts) {
           <div v-if="!boardReady && !events.length" class="board-hydrate" aria-hidden="true">
             <div v-for="n in 6" :key="n" class="skeleton-line"></div>
           </div>
-          <div v-else-if="!events.length" class="empty sm">等待事件…</div>
-          <template v-for="(ev, i) in events" :key="eventExpandKey(ev, i)">
+          <div v-else-if="!eventsGrouped.length" class="empty sm">等待事件…</div>
+          <template v-for="(ev, i) in eventsGrouped" :key="eventExpandKey(ev, i)">
             <div
               :class="[evClass(ev), { expandable: canExpandEvent(ev), open: isEventExpanded(eventExpandKey(ev, i)) }]"
               @click="toggleEventExpand(ev, i)"
@@ -1894,6 +1969,7 @@ function parseEventTs(ts) {
               <span class="ev-icon" :class="`ag-${ev.agent}`">{{ AGENT_ICON[ev.agent] || "•" }}</span>
               <span class="ev-agent" :class="`ag-${ev.agent}`">{{ AGENT_LABEL[ev.agent] || ev.agent }}</span>
               <span class="ev-msg">{{ ev._text }}</span>
+              <span v-if="ev._count > 1" class="ev-count" :title="`同目标同类事件合并 ${ev._count} 条，点开行看完整轨迹`">×{{ ev._count }}</span>
               <button
                 v-if="isLlmErrorEvent(ev)"
                 type="button"
@@ -1966,6 +2042,23 @@ function parseEventTs(ts) {
           @click="exportReviewEdusrcAll"
           :disabled="!reviewCount || bulkWorking"
         >导出 reports.json</button>
+      </div>
+      <div class="sev-filter-row">
+        <span class="sev-filter-label">按等级筛：</span>
+        <button
+          v-for="sev in ['严重', '高危', '中危', '低危']"
+          :key="sev"
+          type="button"
+          class="sev-filter-chip"
+          :class="[sev, { active: sevFilter.has(sev) }]"
+          @click="toggleSevFilter(sev)"
+        >{{ sev }}<template v-if="queueSevCount[sev]"> {{ queueSevCount[sev] }}</template></button>
+        <button
+          v-if="sevFilter.size"
+          type="button"
+          class="sev-filter-clear"
+          @click="sevFilter = new Set()"
+        >清除</button>
       </div>
       <div v-if="!queue.length" class="empty">没有待复审的漏洞（AI 采纳后会进这里）</div>
       <div v-else-if="!filteredQueue.length" class="empty">没有匹配当前关键词的复审漏洞</div>

@@ -4227,3 +4227,61 @@ main {
   border-radius: 3px;
   display: block;
 }
+
+/* ===== 活动流聚合计数徽标 ===== */
+.ev-count {
+  display: inline-block;
+  min-width: 30px;
+  padding: 0 6px;
+  margin-left: 6px;
+  border-radius: 9px;
+  background: #eef2f7;
+  color: #4b5563;
+  border: 1px solid #dbe2ea;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  flex: none;
+}
+
+/* ===== 复审队列等级筛选 ===== */
+.sev-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 0 4px;
+}
+.sev-filter-label { font-size: 12px; color: #6b7280; }
+.sev-filter-chip {
+  padding: 2px 10px;
+  border-radius: 12px;
+  border: 1px solid #dbe2ea;
+  background: #fff;
+  color: #374151;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all .12s;
+}
+.sev-filter-chip:hover { background: #f3f6fa; }
+.sev-filter-chip.active { font-weight: 600; }
+.sev-filter-chip.active.严重 { background: #fee2e2; border-color: #f29a9a; color: #991b1b; }
+.sev-filter-chip.active.高危 { background: #ffedd5; border-color: #f6c68a; color: #b45309; }
+.sev-filter-chip.active.中危 { background: #fef9c3; border-color: #efd97a; color: #854d0e; }
+.sev-filter-chip.active.低危 { background: #eef2f7; border-color: #c7d2e0; color: #4b5563; }
+.sev-filter-clear {
+  margin-left: 4px;
+  padding: 2px 8px;
+  border: none;
+  background: none;
+  color: #2563eb;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* ===== 等条件型事件标灰（用户可一眼跳过） ===== */
+.ev.ev-waiting {
+  opacity: .62;
+  border-left: 2px dashed #d6c9a8;
+}
+.ev.ev-waiting .ev-msg { font-style: italic; }
