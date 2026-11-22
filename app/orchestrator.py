@@ -119,6 +119,9 @@ LOOP_INTERVAL = 3.0
 # 连续这么多次「无法创建线程」就自动暂停。再空转只会把线程耗尽变成永久的
 # 「运行中、worker 为 0」，停止接口还会把退出异常返成 500。
 THREAD_EXHAUST_PAUSE_AFTER = 3
+# 事件日志写库的重试次数。SQLite 单写者，多任务并发 commit 会撞 "database is locked"；
+# 事件日志属非关键路径，退避重试几次，最终失败只记后端日志、不抛给主循环。
+LOG_WRITE_RETRIES = 4
 LOW_WATERMARK = 5
 MAX_RETRY = 1  # 单 target 最多再挖 1 次
 # 进程重启导致的回队不计入 retry_count（重启不是挖掘失败）。
@@ -645,9 +648,29 @@ class TaskRunner:
         }
 
     async def _log(self, session: AsyncSession, agent: str, kind: str, message: str, level: str = "info", **payload):
-        session.add(TaskEvent(task_id=self.task_id, agent=agent, kind=kind, level=level,
-                              message=message, payload=payload))
-        await session.commit()
+        # 写事件是最热的写路径：多任务并发时 commit 会抢 SQLite 写锁，
+        # busy_timeout 用尽就抛 "database is locked"。实测一天 462 次，
+        # 且兜底的错误日志本身也走这里，会二次失败放大噪声。
+        # 这里做短退避重试：事件日志丢一条不影响挖洞，但不能让异常冒到主循环。
+        event = TaskEvent(task_id=self.task_id, agent=agent, kind=kind, level=level,
+                          message=message, payload=payload)
+        for attempt in range(LOG_WRITE_RETRIES):
+            try:
+                session.add(event)
+                await session.commit()
+                break
+            except Exception as exc:
+                await session.rollback()
+                locked = "database is locked" in str(exc).lower()
+                if attempt >= LOG_WRITE_RETRIES - 1:
+                    # 最终失败：只记后端日志，不抛（事件日志不是关键路径）
+                    logger.warning("TaskRunner[%s] event log dropped kind=%s: %s",
+                                   self.task_id[:8], kind, str(exc)[:120])
+                    break
+                # 锁冲突按 0.05/0.1/0.2/0.4s 退避；其它异常原样抛出（可能是真 bug）
+                if not locked:
+                    raise
+                await asyncio.sleep(0.05 * (2 ** attempt))
         # ts 统一用带 UTC 标识的 ISO 字符串（…+00:00），前端 new Date 才能正确转本地时区。
         await bus.publish(self.task_id, {"agent": agent, "kind": kind, "level": level,
                                          "message": message, "ts": _now_iso(), **payload})
@@ -2694,23 +2717,30 @@ class TaskRunner:
         if not msg:
             from app.agents.auth_bootstrap import format_auth_status_message
             msg = format_auth_status_message(safe)
-        try:
-            async with SessionLocal() as session:
-                tgt = await session.get(Target, target_id)
-                if not tgt:
-                    return
-                tgt.auth_status = safe
-                session.add(TaskEvent(
-                    task_id=self.task_id,
-                    agent="worker",
-                    kind="auth_status",
-                    level="info" if safe["status"] in ("injected", "login_ok") else "warn",
-                    message=msg[:500],
-                    payload={"target_id": target_id, "host": tgt.host, **safe},
-                ))
-                await session.commit()
-        except Exception:
-            logger.warning("persist_auth_status failed target=%s", target_id[:8], exc_info=True)
+        for attempt in range(LOG_WRITE_RETRIES):
+            try:
+                async with SessionLocal() as session:
+                    tgt = await session.get(Target, target_id)
+                    if not tgt:
+                        return
+                    tgt.auth_status = safe
+                    session.add(TaskEvent(
+                        task_id=self.task_id,
+                        agent="worker",
+                        kind="auth_status",
+                        level="info" if safe["status"] in ("injected", "login_ok") else "warn",
+                        message=msg[:500],
+                        payload={"target_id": target_id, "host": tgt.host, **safe},
+                    ))
+                    await session.commit()
+                return
+            except Exception as exc:
+                locked = "database is locked" in str(exc).lower()
+                if locked and attempt < LOG_WRITE_RETRIES - 1:
+                    await asyncio.sleep(0.05 * (2 ** attempt))
+                    continue
+                logger.warning("persist_auth_status failed target=%s", target_id[:8], exc_info=True)
+                return
 
     async def _persist_single_finding(self, task_id: str, target_id: str, f: dict) -> None:
         """worker 每 submit 一个洞就实时落库，进程被打断时不丢洞。
