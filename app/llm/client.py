@@ -323,6 +323,17 @@ def _sanitize_error_detail(text: str, limit: int = 1200) -> str:
     return text[:limit]
 
 
+# 记忆：哪些「端点 + 模型」不支持强制 tool_choice。
+# 实测 deepseek-v4-flash 每次都先吃一个 400 再降级，一天 116 次纯浪费。
+# 命中一次就记住，后续直接以 auto 起步，不再重复试错。
+# key = (base_url, model)，跨 LLMClient 实例共享（模块级）。
+_FORCED_TC_UNSUPPORTED: set[tuple[str, str]] = set()
+
+
+def _tc_cache_key(base_url: str, model: str) -> tuple[str, str]:
+    return ((base_url or "").strip().rstrip("/"), (model or "").strip())
+
+
 def _is_forced_tool_choice(tool_choice: Any) -> bool:
     if tool_choice in (None, "auto", "none"):
         return False
@@ -1474,6 +1485,16 @@ class LLMClient:
         last_exc: Optional[Exception] = None
         active_tool_choice: Any = tool_choice
         tool_choice_fallback_used = False
+        # 该端点+模型已知不支持强制 tool_choice：直接以 auto 起步，省掉必吃的那次 400。
+        _tc_key = _tc_cache_key(self.config.base_url, self.config.model)
+        if (
+            tools
+            and _is_forced_tool_choice(active_tool_choice)
+            and _tc_key in _FORCED_TC_UNSUPPORTED
+        ):
+            active_tool_choice = "auto"
+            kwargs["tool_choice"] = "auto"
+            tool_choice_fallback_used = True
         max_tokens_fallback_used = False
         max_retries = _POOL_SAME_PROVIDER_RETRIES if self.pool_mode else _MAX_RETRIES
         retry_count = 0
@@ -1517,6 +1538,8 @@ class LLMClient:
                     active_tool_choice = "auto"
                     kwargs["tool_choice"] = "auto"
                     tool_choice_fallback_used = True
+                    # 记住这个端点+模型不支持强制 tool_choice，后续直接 auto 起步
+                    _FORCED_TC_UNSUPPORTED.add(_tc_key)
                     continue
                 # 工具调用兼容：端点对 tools 参数硬报错「不支持」时，自动切提示词模拟重试。
                 # 仅 auto 模式、仅命中明确「不支持工具」的信号才切，原生可用模型不受影响。

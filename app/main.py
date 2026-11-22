@@ -45,6 +45,7 @@ from app.proxy_service import init_proxy_cache
 from app.security import SECURITY_HEADERS, auth_enabled, protected_path, request_allowed, resolve_role, token_from_headers
 from app.waf import WAF_BLOCK_MODE, inspect_request, waf_headers
 from app.workdir_cleanup import run_periodic_cleanup
+from app.event_cleanup import run_periodic_event_cleanup
 from app.memory import run_periodic_memory_reclaim
 
 # Vite 构建产物目录（多阶段构建拷贝到此）
@@ -127,6 +128,7 @@ async def lifespan(app: FastAPI):
     memory_task = asyncio.create_task(run_periodic_memory_reclaim())
     backup_task = asyncio.create_task(run_periodic_backup())
     wal_task = asyncio.create_task(run_periodic_wal_checkpoint())
+    event_cleanup_task = asyncio.create_task(run_periodic_event_cleanup())
     await init_db()
     await init_settings_cache()
     await init_proxy_cache()
@@ -160,7 +162,8 @@ async def lifespan(app: FastAPI):
         memory_task.cancel()
         backup_task.cancel()
         wal_task.cancel()
-        for t in (lag_monitor, cleanup_task, memory_task, backup_task, wal_task):
+        event_cleanup_task.cancel()
+        for t in (lag_monitor, cleanup_task, memory_task, backup_task, wal_task, event_cleanup_task):
             try:
                 await t
             except asyncio.CancelledError:
