@@ -48,6 +48,21 @@ const SEV_META = {
 };
 
 const severityOptions = computed(() => Object.keys(stats.value.by_severity || {}));
+// 等级分布徽标：原来直接显示 severityOptions.length（下拉有多少个档位，永远是固定 5），
+// 跟实际分布无关，用户看到「等级分布 5」会以为是 5 个洞。改为真实档位数。
+const severitySpread = computed(() => {
+  const by = stats.value.by_severity || {};
+  const real = Object.entries(by).filter(([, n]) => Number(n) > 0);
+  return real.length || 0;
+});
+// 悬停显示各档明细，如「严重 2 · 高危 8 · 中危 1 · 低危 1」
+const severityBreakdown = computed(() => {
+  const by = stats.value.by_severity || {};
+  const parts = Object.entries(by)
+    .filter(([, n]) => Number(n) > 0)
+    .map(([k, n]) => `${k} ${n}`);
+  return parts.length ? parts.join(" · ") : "暂无过审漏洞";
+});
 const selectedCount = computed(() => selected.value.size);
 const pageIds = computed(() => rows.value.map((r) => r.id));
 const allChecked = computed(() =>
@@ -93,6 +108,12 @@ function prevPage() {
   if (page.value <= 0 || refreshing.value) return;
   page.value -= 1;
   loadList();
+}
+
+// 有效等级：AI 判定 > worker 自评。severity_final 为空的洞（AI 判 deepen 时被清空且
+// 人工通过时未回填）会退到 severity_claimed，避免严重级 RCE 显示「未定级」。
+function effectiveSev(row) {
+  return row?.effective_severity || row?.severity_claimed || "";
 }
 
 function sevMeta(s) {
@@ -208,9 +229,9 @@ onActivated(() => {
         <b class="dash-v">{{ stats.ready }}</b>
         <span class="dash-k">待提交</span>
       </div>
-      <div class="dash-card info">
+      <div class="dash-card info" :title="severityBreakdown">
         <span class="dash-icon">∑</span>
-        <b class="dash-v">{{ severityOptions.length }}</b>
+        <b class="dash-v">{{ severitySpread }}</b>
         <span class="dash-k">等级分布</span>
       </div>
     </div>
@@ -259,14 +280,14 @@ onActivated(() => {
     </div>
     <div v-else class="intel-grid">
       <article v-for="row in rows" :key="row.id" class="intel-row pin-row"
-               :class="[sevMeta(row.effective_severity).hue, { pinned: row.is_top }]"
+               :class="[sevMeta(effectiveSev(row)).hue, { pinned: row.is_top }]"
                role="button" tabindex="0" @click="openVuln(row)" @keyup.enter="openVuln(row)">
         <span v-if="row.is_top" class="pin-mark" title="已置顶">★</span>
         <input v-if="writable" type="checkbox" class="row-check"
                :checked="selected.has(row.id)"
                @click.stop @change="toggleRowChecked(row, $event.target.checked)" />
-        <span class="ir-kind" :class="sevMeta(row.effective_severity).hue">
-          <i>⚑</i>{{ sevMeta(row.effective_severity).label }}
+        <span class="ir-kind" :class="sevMeta(effectiveSev(row)).hue">
+          <i>⚑</i>{{ sevMeta(effectiveSev(row)).label }}
         </span>
         <div class="ir-main">
           <b class="ir-primary">{{ row.title }}</b>

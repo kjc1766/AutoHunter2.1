@@ -1546,6 +1546,16 @@ async def user_review(finding_id: str, req: UserReviewRequest,
                 killsweep_skipped_reason = "本任务已关闭自动通杀"
     if req.user_severity is not None:
         r.user_severity = req.user_severity
+    # 复审通过时补 severity_final：AI 判 deepen/复现失败时会把它清成 None（"未定级"），
+    # 之后人工点通过也不会回填，导致漏洞库里严重级 RCE 显示"未定级"（实测 1 条）。
+    # 优先级：人工调整 > AI 判定 > worker 自评。
+    if req.user_status == "passed" and not r.severity_final:
+        r.severity_final = (
+            (req.user_severity if req.user_severity is not None else None)
+            or r.severity_final
+            or f.severity_claimed
+            or "中危"
+        )
     if req.user_notes is not None:
         r.user_notes = req.user_notes
     if req.user_edits is not None:

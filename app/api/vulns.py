@@ -89,7 +89,14 @@ async def vuln_stats(session: AsyncSession = Depends(get_session)):
         .where(and_(*conds, Review.submitted.is_(True)))
     )).scalar() or 0
     by_sev: dict[str, int] = {}
-    sev_expr = func.coalesce(Review.user_severity, Review.severity_final)
+    # 三级兜底：人工调整 > AI 判定 > worker 自评。
+    # 注意 user_severity 可能是空字符串而不是 NULL，COALESCE 只跳 NULL，
+    # 所以要先把空串转成 NULL（NULLIF），否则空串会"赢"过后面两级，落进未定级。
+    sev_expr = func.coalesce(
+        func.nullif(Review.user_severity, ""),
+        func.nullif(Review.severity_final, ""),
+        func.nullif(Finding.severity_claimed, ""),
+    )
     rows = await session.execute(
         select(sev_expr, func.count())
         .select_from(Finding)
