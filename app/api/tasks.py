@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time as _time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -321,7 +322,28 @@ def _task_to_dto(t: Task, stats: TaskStats | None = None,
     )
 
 
+# 统计缓存：task_id -> (计算时刻, TaskStats)。见 _compute_stats 内注释。
+_STATS_CACHE: dict[str, tuple[float, TaskStats]] = {}
+
+
 async def _compute_stats(session: AsyncSession, task_id: str) -> TaskStats:
+    # 短 TTL 缓存：前端 board 每 2.5s 轮询，每次都要跑 18 条统计 SQL（实测 94ms，
+    # 是 events 查询的 11 倍）。1.5s 内的重复请求直接复用，统计口径不变
+    # （看板本来就是秒级快照，1.5s 误差用户无感）。
+    _now_ts = _time.monotonic()
+    _cached = _STATS_CACHE.get(task_id)
+    if _cached and (_now_ts - _cached[0]) < 1.5:
+        return _cached[1]
+    stats = await _compute_stats_uncached(session, task_id)
+    _STATS_CACHE[task_id] = (_now_ts, stats)
+    # 防内存泄漏：只保留最近 64 个任务
+    if len(_STATS_CACHE) > 64:
+        for k in list(_STATS_CACHE)[:32]:
+            _STATS_CACHE.pop(k, None)
+    return stats
+
+
+async def _compute_stats_uncached(session: AsyncSession, task_id: str) -> TaskStats:
     stats = TaskStats()
     rows = await session.execute(
         select(Target.status, func.count()).where(Target.task_id == task_id).group_by(Target.status)

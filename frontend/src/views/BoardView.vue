@@ -810,9 +810,15 @@ const collabPhases = computed(() => {
   return phases.map((p) => ({ ...p, routes: groupedCollabRoutes(p.routes) }));
 });
 
+// 防并发重入：board 每 2.5s 轮询，单次在慢任务上要 150~1600ms，
+// 上一次没返回就发下一次会叠请求（实测同一时刻出现 0ms 间隔双发），
+// 服务端每次还要算 18 条统计 SQL，越叠越慢，最终表现成"点开白屏/卡"。
+let _boardInFlight = false;
 async function loadBoard() {
+  if (_boardInFlight) return;
   const id = props.id;
   try {
+    _boardInFlight = true;
     const b = await api.board(id);
     if (id !== props.id) return;
     liveWorkers.value = b.live_workers || [];
@@ -834,6 +840,7 @@ async function loadBoard() {
         .filter(Boolean);
     }
   } finally {
+    _boardInFlight = false;
     if (id === props.id) boardReady.value = true;
   }
 }
