@@ -24,12 +24,12 @@ from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
 
-# 普通 info 事件的保留天数（默认 30 天）
-EVENT_RETENTION_DAYS = int(os.environ.get("EVENT_RETENTION_DAYS", "30"))
-# error/warn 事件额外多保留的天数（默认再多 60 天，共 90 天）
-EVENT_ERROR_WARN_EXTRA_DAYS = int(os.environ.get("EVENT_ERROR_WARN_EXTRA_DAYS", "60"))
-# 清理间隔（小时）
-EVENT_CLEANUP_INTERVAL_HOURS = int(os.environ.get("EVENT_CLEANUP_INTERVAL_HOURS", "24"))
+# 普通 info 事件的保留天数（默认 7 天，控制库体积：一天约 6k 行，7 天约 4.5 万行）
+EVENT_RETENTION_DAYS = int(os.environ.get("EVENT_RETENTION_DAYS", "7"))
+# error/warn 事件额外多保留的天数（默认再多 23 天，共 30 天，留足排障窗口）
+EVENT_ERROR_WARN_EXTRA_DAYS = int(os.environ.get("EVENT_ERROR_WARN_EXTRA_DAYS", "23"))
+# 清理间隔（小时）。保留窗口只有 7 天，用 6h 跑一次，过期数据最多滞留 6 小时。
+EVENT_CLEANUP_INTERVAL_HOURS = int(os.environ.get("EVENT_CLEANUP_INTERVAL_HOURS", "6"))
 # 单次最多删多少行，避免大事务长时间锁库（影响挖掘）
 EVENT_CLEANUP_BATCH = int(os.environ.get("EVENT_CLEANUP_BATCH", "5000"))
 
