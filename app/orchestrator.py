@@ -1175,18 +1175,24 @@ class TaskRunner:
 
         if revived or converged:
             await session.commit()
+            # 注意：_log 内部会 session.commit()，commit 后 SQLAlchemy 默认 expire 所有 ORM 对象，
+            # 之后再访问 t.host / t.id 会触发 lazy load —— 而这里是在 await 之间同步访问属性，
+            # 不在 greenlet 上下文里，会抛 MissingGreenlet（实测 2 次，栈指向本函数）。
+            # 所以在调用 _log 之前，先把需要的字段取成普通值。
             for t in revived:
+                host, tid = t.host, t.id
+                bcnt, cond = t.block_count, (t.unblock_condition or "")[:200]
                 await self._log(
                     session, "orchestrator", "target_unblocked",
-                    f"目标 {t.host} 受阻冷却结束，重新入队（第 {t.block_count} 次受阻后重试）",
-                    target_id=t.id, block_count=t.block_count,
-                    unblock_condition=(t.unblock_condition or "")[:200],
+                    f"目标 {host} 受阻冷却结束，重新入队（第 {bcnt} 次受阻后重试）",
+                    target_id=tid, block_count=bcnt, unblock_condition=cond,
                 )
             for t in converged:
+                host, tid, bcnt = t.host, t.id, t.block_count
                 await self._log(
                     session, "orchestrator", "target_blocked_exhausted",
-                    f"目标 {t.host} 受阻 {t.block_count} 次仍未解除，收敛为 dead",
-                    level="warn", target_id=t.id, block_count=t.block_count,
+                    f"目标 {host} 受阻 {bcnt} 次仍未解除，收敛为 dead",
+                    level="warn", target_id=tid, block_count=bcnt,
                 )
         return len(revived)
 
@@ -3691,8 +3697,10 @@ class TaskRunner:
                 else:
                     f.status = "reviewed"
                 await session.commit()
+                # commit expire 后访问 f.title 会触发 lazy load（MissingGreenlet），先取值
+                _ft = f.title
                 await self._log(session, "reviewer", "review_done",
-                                f"审核「{f.title}」: {rv['verdict']} {rv.get('severity_final') or ''}{extra}",
+                                f"审核「{_ft}」: {rv['verdict']} {rv.get('severity_final') or ''}{extra}",
                                 finding_id=finding_id, verdict=rv["verdict"],
                                 severity=rv.get("severity_final"), score=rv["score"])
                 # 通杀 Hunter 不在 AI accepted 后触发；必须等人工复审 passed 后再启动。
@@ -3760,14 +3768,17 @@ class TaskRunner:
                 session.add(row)
             await session.commit()
             await session.refresh(row)
+            # commit 会 expire ORM 对象；后续在 await 之间同步访问 f.title 可能触发
+            # lazy load 而抛 MissingGreenlet，先取成普通值。
+            _f_title = f.title or finding_id
             task = await session.get(Task, task_id)
             engine_name = resolve_engine_config(task).get("engine") or "fofa"
             from app.engines.sync import engine_display_name
             disp = engine_display_name(engine_name)
             await self._log(
                 session, "killsweep", "killsweep_start",
-                f"通杀启动（{disp}）：{f.title or finding_id}",
-                finding_id=finding_id, killsweep_id=row.id, title=f.title or "",
+                f"通杀启动（{disp}）：{_f_title}",
+                finding_id=finding_id, killsweep_id=row.id, title=_f_title,
                 engine=engine_name,
             )
             return row.id
@@ -4268,8 +4279,10 @@ class TaskRunner:
             except IntegrityError:
                 # 已存在同键升级洞（重复触发/并发），跳过。
                 return
+            # commit expire 后访问 origin.title 会触发 lazy load（MissingGreenlet），先取值
+            _ot = origin.title or ""
             await self._log(session, "escalation", "escalate_done",
-                            f"扩大危害成功「{origin.title}」→「{title}」({orig_severity}→{new_severity})，"
+                            f"扩大危害成功「{_ot}」→「{title}」({orig_severity}→{new_severity})，"
                             f"已生成新洞进审核",
                             finding_id=origin_finding_id, new_severity=new_severity)
 
